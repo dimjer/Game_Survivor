@@ -214,14 +214,14 @@ function fightBlock() {
 // Панель раздела (оружие, бусты…): справа в альбомной ориентации, снизу в портретной
 function sheetRect() {
   const tb = tabBarH();
-  if (W > H) { const w = Math.min(560, W * 0.56); return { x: W - w - 12, y: 58, w, h: H - tb - 66 }; }
+  if (W > H) { const w = Math.min(560, W * 0.56); return { x: W - w - 12, y: 58 + SAFE_T, w, h: H - tb - 66 - SAFE_T }; }
   const y = Math.max(230, Math.round(H * 0.42));
   return { x: 0, y, w: W, h: H - tb - y };
 }
 
 // Где на экране стоит герой (точка 0, 0 убежища) и насколько приближена камера
 function menuCamera() {
-  const top = 56;
+  const top = 56 + SAFE_T;
   let x = W / 2, y, area;
   if (screen === 'campaign' || screen === 'endless') {
     const f = fightBlock();
@@ -245,14 +245,14 @@ function drawChip(right, value, sym, color) {
   ctx.font = 'bold 15px system-ui, sans-serif';
   const s = value + ' ' + sym, w = ctx.measureText(s).width + 20;
   ctx.fillStyle = 'rgba(27,29,38,0.9)';
-  roundRect(right - w, 12, w, 32, 16); ctx.fill();
-  text(s, right - w / 2, 28, 15, color, 'center');
+  roundRect(right - w, 12 + SAFE_T, w, 32, 16); ctx.fill();
+  text(s, right - w / 2, 28 + SAFE_T, 15, color, 'center');
   return right - w - 8;
 }
 
 function drawMenuTop() {
   let rx = W - 12;
-  const g = { x: rx - 40, y: 8, w: 40, h: 40, act: () => setScreen(screen === 'settings' ? 'campaign' : 'settings') };
+  const g = { x: rx - 40, y: 8 + SAFE_T, w: 40, h: 40, act: () => setScreen(screen === 'settings' ? 'campaign' : 'settings') };
   ctx.fillStyle = screen === 'settings' ? '#2a2e3d' : 'rgba(27,29,38,0.9)';
   roundRect(g.x, g.y, g.w, g.h, 10); ctx.fill();
   ctx.strokeStyle = screen === 'settings' ? '#ffd166' : '#c8cbd6'; ctx.lineWidth = 3;
@@ -394,7 +394,8 @@ function levelCard(n) {
   const lines = wrapText(levelLore(n), w - 24, 13), traits = levelTraits(n);
   const h = 14 + 16 + lines.length * 17 + (traits.length ? 30 : 0) + 8;
   // Под карточкой (в альбомной) или над строкой главы (в портретной) — переключатель сложности
-  if (land) return { x: 12, y: 60, w, h, lines, traits, diff: { x: 12, y: 60 + h + 6, w, h: 32 } };
+  const y0 = 60 + SAFE_T;
+  if (land) return { x: 12, y: y0, w, h, lines, traits, diff: { x: 12, y: y0 + h + 6, w, h: 32 } };
   const dy = f.selY - 6 - 32;
   return { x: (W - w) / 2, y: dy - 8 - h, w, h, lines, traits, diff: { x: (W - w) / 2, y: dy, w, h: 32 } };
 }
@@ -435,7 +436,7 @@ function drawLevelCard(n) {
 
 // Кнопка календаря (недельные задания) сбоку на вкладке кампании; красная точка — есть что забрать
 function drawCalendarButton() {
-  const b = { x: W - 12 - 48, y: 56, w: 48, h: 48, act: () => setScreen('quests') };
+  const b = { x: W - 12 - 48, y: 56 + SAFE_T, w: 48, h: 48, act: () => setScreen('quests') };
   ctx.fillStyle = 'rgba(27,29,38,0.9)';
   roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill();
   ctx.strokeStyle = '#2c3040'; ctx.lineWidth = 2; ctx.stroke();
@@ -917,7 +918,7 @@ function drawLevelUp() {
   else { cw = Math.min(220, (W - 64 - gap * (n - 1)) / n); ch = 140; }
   const totalW = portrait ? cw : n * cw + (n - 1) * gap;
   const totalH = (portrait ? n * ch + (n - 1) * gap : ch) + 16 + bh;
-  const x0 = (W - totalW) / 2, y0 = Math.max(70, (H - totalH) / 2 + 10);
+  const x0 = (W - totalW) / 2, y0 = Math.max(70 + SAFE_T, (H - totalH) / 2 + 10);
 
   ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
   ctx.font = 'bold 24px system-ui, sans-serif';
@@ -977,7 +978,7 @@ function drawPause() {
   dim();
   const w = Math.min(W - 32, 360), x = (W - w) / 2, rh = 44, bh = 46, gap = 8;
   const total = 44 + PAUSE_OPTS.length * (rh + gap) + 8 + 2 * (bh + gap);
-  let y = Math.max(12, (H - total) / 2);
+  let y = Math.max(12 + SAFE_T, (H - total) / 2);
   text('ПАУЗА', W / 2, y + 16, 26, '#fff', 'center');
   y += 44;
   for (const [key, name] of PAUSE_OPTS) {
@@ -1031,7 +1032,7 @@ function drawResult() {
   const bh = land ? 42 : 46, gap = 8, step = land ? 28 : 30;
   const blockH = lines.length * step + 16 + buttons.length * (bh + gap);
   const cx = land && rows.length ? W * 0.36 : W / 2, mw = land && rows.length ? W * 0.6 : W - 32;
-  const y0 = Math.max(16, (H - blockH - (land ? 0 : th + 12)) / 2);
+  const y0 = Math.max(16 + SAFE_T, (H - blockH - (land ? 0 : th + 12)) / 2);
   centerText(lines, y0 + (lines.length - 1) * step / 2, step, cx, mw);
   buttonColumn(y0 + lines.length * step + 8, buttons, bh, gap, cx, mw);
   if (!rows.length) return;

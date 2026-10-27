@@ -8,21 +8,27 @@
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
-let W = 0, H = 0, DPR = 1, SCALE = 1, SAFE_B = 0;
+// SAFE_T / SAFE_B — отступы под часами/вырезом камеры и под полоской «домой» (iPhone)
+let W = 0, H = 0, DPR = 1, SCALE = 1, SAFE_B = 0, SAFE_T = 0;
 const safeProbe = document.createElement('div');
-safeProbe.style.cssText = 'position:fixed;left:0;bottom:0;width:1px;height:env(safe-area-inset-bottom);pointer-events:none;visibility:hidden';
+safeProbe.style.cssText = 'position:fixed;left:0;top:0;width:1px;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);pointer-events:none;visibility:hidden';
 document.body.appendChild(safeProbe);
 function resize() {
-  SAFE_B = safeProbe.offsetHeight || 0;
+  const ps = getComputedStyle(safeProbe);
+  SAFE_T = parseFloat(ps.paddingTop) || 0;
+  SAFE_B = parseFloat(ps.paddingBottom) || 0;
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth;
-  H = window.innerHeight;
+  // Размер берём у самого холста: в полноэкранном режиме iPhone innerHeight бывает меньше экрана
+  const r = canvas.getBoundingClientRect();
+  W = r.width || window.innerWidth;
+  H = r.height || window.innerHeight;
   canvas.width = Math.floor(W * DPR);
   canvas.height = Math.floor(H * DPR);
   // Сколько мира видно: короткая сторона экрана ≈ 420 игровых единиц
   SCALE = Math.max(0.8, Math.min(W, H) / 420);
 }
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 300));
 resize();
 
 // ------------------------------------------------------------
@@ -1592,7 +1598,7 @@ function fmtTime(t) {
 function drawHud() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   const h = G.hero, c = G.camp;
-  const top = 10;
+  const top = 10 + SAFE_T;
 
   // Полоса опыта
   ctx.fillStyle = '#05060a';

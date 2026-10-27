@@ -1,0 +1,7 @@
+{
+  "appId": "com.dkartinnik.survivor",
+  "appName": "Survivor",
+  "webDir": "www",
+  "backgroundColor": "#0e0f13",
+  "ios": { "contentInset": "never", "backgroundColor": "#0e0f13" }
+}

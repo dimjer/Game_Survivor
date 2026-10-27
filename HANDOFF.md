@@ -69,7 +69,18 @@ cd ~/Documents/Project/GameStudio/survivor && python3 serve.py
 
 ## Путь на iPhone как приложение
 
-- Сейчас: браузер / «На экран Домой» (бесплатно).
-- Своё приложение на свой телефон: Capacitor-обёртка над этой папкой + Xcode с бесплатным Apple ID (подпись живёт 7 дней, потом переустановить).
+Цель поменялась: не Steam, а телефоны и планшеты (App Store и Google Play).
+
+- Браузер / «На экран Домой» — бесплатно, без установки.
+- **Сделано:** своё приложение на iPhone. Папка `mobile/` — Capacitor 8 (`appId` `com.dkartinnik.survivor`, команда Personal Team, бесплатный Apple ID). Подпись живёт 7 дней, потом поставить заново. Статус-бар скрыт, иконка — пиксельный герой; заставка запуска пока стандартная от Capacitor (заменить).
+  Обновить приложение на подключённом iPhone (Xcode сам ставит нестабильно — таймаут туннеля, поэтому через devicectl):
+  ```
+  cd mobile && npm install && npm run sync
+  cd ios/App && xcodebuild -project App.xcodeproj -scheme App -destination 'id=<UDID>' -allowProvisioningUpdates -quiet build
+  xcrun devicectl device install app --device <UDID> ~/Library/Developer/Xcode/DerivedData/App-*/Build/Products/Debug-iphoneos/App.app
+  xcrun devicectl device capture screenshot --device <UDID> --destination shot.png   # снимок экрана телефона
+  ```
+  UDID: `xcrun devicectl list devices`. На телефоне один раз: «Режим разработчика» и «Доверять» разработчику.
+- Android: тот же проект, `npx cap add android` + Java и Android SDK → APK можно кидать в Telegram.
 - App Store / TestFlight: нужен Apple Developer Program ($99 в год). Там же — настоящие покупки и реклама.
 - Если упрёмся в производительность или захочется серьёзной графики: порт на Godot (бесплатно, экспорт в iOS).

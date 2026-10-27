@@ -30,6 +30,13 @@ function resize() {
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 300));
 resize();
+// В приложении (WKWebView) отступы безопасной зоны приходят уже после запуска, без события resize —
+// перепроверяем раз в полсекунды и пересчитываем, только если что-то изменилось
+setInterval(() => {
+  const ps = getComputedStyle(safeProbe), r = canvas.getBoundingClientRect();
+  if ((parseFloat(ps.paddingTop) || 0) !== SAFE_T || (parseFloat(ps.paddingBottom) || 0) !== SAFE_B ||
+      (r.width && r.width !== W) || (r.height && r.height !== H)) resize();
+}, 500);
 
 // ------------------------------------------------------------
 //  Пространственная сетка — быстрый поиск врагов рядом с точкой

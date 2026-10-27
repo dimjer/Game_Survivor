@@ -1,0 +1,13 @@
+{
+  "name": "survivor-mobile",
+  "private": true,
+  "scripts": {
+    "copy": "rm -rf www && mkdir www && cp ../index.html ../*.js ../favicon.svg ../apple-touch-icon.png www/",
+    "sync": "npm run copy && npx cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3"
+  }
+}

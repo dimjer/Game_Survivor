@@ -64,32 +64,47 @@ const near = [];
 
 // mode: 'endless' | 'camp'; level — номер уровня кампании
 let G;
-function newGame(state = 'play', mode = 'endless', level = 0) {
+function newGame(state = 'play', mode = 'endless', level = 0, diff = 0) {
   G = {
-    state, mode, level, t: 0, kills: 0, shake: 0, stateAt: performance.now(),
-    arena: mode === 'camp' ? levelArena(level) : ['plain', 'crypt', 'inferno'][Math.floor(Math.random() * 3)],
+    state, mode, level, diff, t: 0, kills: 0, shake: 0, stateAt: performance.now(),
+    arena: mode === 'camp' ? levelArena(level) : endlessArena(),
+    traits: mode === 'camp' ? levelTraits(level) : [], // особенности уровня: a, s, r, h
     intro: 0, // > 0 — камера ещё отъезжает после выхода из убежища
     hero: {
       x: 0, y: 0, r: 9, hp: 100, maxHp: 100, speed: 115, face: 1, inv: 0, walk: 0,
       level: 1, xp: 0, xpNext: 5, magnet: 55, regen: 0, dmgMul: 1, cdMul: 1,
     },
     enemies: [], bullets: [], ebullets: [], gems: [], texts: [], particles: [], banners: [],
-    weapons: { [SAVE.startWeapon]: 1 }, passives: {}, timers: {}, orbAng: 0,
-    spawnAcc: 0, nextElite: 120, nextSwarm: 60, bossCount: 0,
+    weapons: { [heroWeapon()]: newUps(heroWeapon()) }, passives: {}, timers: {}, orbAng: 0,
+    heroBonus: heroBonuses(), evo: curEvo(),
+    active: { t: 0, cd: 5 },        // активка героя: t — сколько ещё действует, cd — до готовности
+    pendingWeapons: 0,              // убит промежуточный моб — ждёт выбор оружия
+    rerolls: { up: 0, weapon: 0 },  // сколько раз нажат «Новый набор» (первый раз бесплатно)
+    nextEliteT: ECON.eliteEvery,
+    stats: { total: {}, sec: {} },  // урон по источникам: всего и по секундам (последние 10 с)
+    spawnAcc: 0, nextElite: 120, nextSwarm: 60, bossCount: 0, nextPack: ECON.packEvery,
+    hazards: [], hazardAcc: 0,
     pendingLevels: 0, choices: null, cardRects: [],
     gold: 0, revived: false, hatch: null, result: null,
     pet: { x: -18, y: -14, cd: 1 },
     // Кампания: цель по убийствам, текущая волна, пройденные вехи (0/1/2), босс и награды забега
     camp: mode === 'camp'
-      ? { target: ECON.kills(level), wave: 0, got: 0, boss: null, won: null, earned: { gold: 0, shards: 0 } }
+      ? { dur: ECON.bossTime(level), wave: 0, got: 0, elites: 0, boss: null, won: null, earned: { gold: 0, shards: 0 } }
       : null,
   };
   applyMeta(G.hero);
+  if (state === 'play') questAdd('runs');
 }
 newGame('menu');
 
 function setState(s) { G.state = s; G.stateAt = performance.now(); }
 const arena = () => ARENAS[G.arena];
+const has = t => G.traits.includes(t);
+// В бесконечном — случайная из открытых локаций
+function endlessArena() {
+  const open = LOCATIONS.filter(l => l.from <= SAVE.unlocked);
+  return open[Math.floor(Math.random() * open.length)].id;
+}
 
 // ------------------------------------------------------------
 //  Ввод: клавиатура + плавающий джойстик для пальца/мыши
@@ -104,9 +119,11 @@ window.addEventListener('keydown', e => {
   keys.add(e.code);
   const back = e.code === 'Escape' || e.code === 'Backspace';
   const ok = e.code === 'Enter' || e.code === 'Space';
-  if (G.state === 'levelup' && G.choices) {
-    const n = { Digit1: 0, Digit2: 1, Digit3: 2 }[e.code];
+  if ((G.state === 'levelup' || G.state === 'weaponpick') && G.choices) {
+    const n = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3 }[e.code];
     if (n !== undefined && G.choices[n]) pickChoice(G.choices[n]);
+  } else if (G.state === 'play' && (e.code === 'KeyQ' || e.code === 'KeyE')) {
+    useActive();
   } else if (G.state === 'play' && (e.code === 'Escape' || e.code === 'KeyP')) {
     setState('pause');
   } else if (G.state === 'pause' && (ok || e.code === 'Escape')) {
@@ -132,7 +149,7 @@ canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
   const x = e.clientX, y = e.clientY;
   if (G.state === 'play') {
-    if (hitUi(x, y)) return; // кнопка паузы
+    if (hitUi(x, y)) return; // кнопки паузы и активки
     joy = { id: e.pointerId, ox: x, oy: y, x, y };
     return;
   }
@@ -162,9 +179,10 @@ canvas.addEventListener('wheel', e => {
 }, { passive: true });
 
 function onTap(x, y) {
-  if (G.state === 'levelup') {
+  if (G.state === 'levelup' || G.state === 'weaponpick') {
     const i = G.cardRects.findIndex(r => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
     if (i >= 0) pickChoice(G.choices[i]);
+    else hitUi(x, y); // «Новый набор», «Взять все», реклама
     return;
   }
   if (hitUi(x, y)) return;
@@ -203,7 +221,8 @@ function pushEnemy(o, x, y) {
 function enemyScale() {
   if (G.mode === 'camp') {
     const n = G.level;
-    return { hp: ECON.levelHp(n) * ECON.waveHp[G.camp.wave], dmg: ECON.levelDmg(n), speed: ECON.levelSpeed(n) };
+    const D = DIFFS[G.diff];
+    return { hp: ECON.levelHp(n) * ECON.waveHp[G.camp.wave] * (has('s') ? ECON.swarmHp : 1) * D.hp, dmg: ECON.levelDmg(n) * D.dmg, speed: ECON.levelSpeed(n) };
   }
   const over = Math.max(0, G.kills - ECON.rampKills);
   // После порога убийств орда звереет: HP растёт экспоненциально, урон — линейно
@@ -215,6 +234,8 @@ function makeMob(tier, x, y) {
   return pushEnemy({
     tier, arch: M.arch, r: A.r, hp: A.hp * k.hp, speed: A.speed * k.speed * rand(0.9, 1.1),
     dmg: Math.round(A.dmg * k.dmg), color: M.color, shape: M.shape, xp: A.xp,
+    armor: has('a') ? ECON.armor : 0,
+    shoot: has('r') && Math.random() < ECON.shooterChance ? rand(0.5, ECON.shooterCd) : 0, // > 0 — стрелок, до выстрела
   }, x, y);
 }
 
@@ -223,21 +244,46 @@ function spawnMob(tier, ang = rand(0, TAU), R = spawnRadius()) {
   return makeMob(tier, h.x + Math.cos(ang) * R, h.y + Math.sin(ang) * R);
 }
 
-// Случайный моб из окна уровней [base..base+3]; shift > 0 чаще выбирает сильных
-function pickTier(base, shift = 0) {
-  const lo = Math.min(base, MOBS.length - 3), hi = lo + 3;
+// Мобы текущей локации: tier от lo до lo + 2
+const mobLo = () => locIndex(G.arena) * 3 + 1;
+
+// Случайный моб локации; shift > 0 чаще выбирает сильных. На «Стаях» больше бегунов
+function pickTier(shift = 0) {
+  const lo = mobLo(), hi = lo + 2;
   const w = [];
   let sum = 0;
   for (let k = lo; k <= hi; k++) {
-    const v = ARCH[MOBS[k - 1].arch].weight * (1 + shift * (k - lo) / 3);
+    const arch = MOBS[k - 1].arch;
+    const v = ARCH[arch].weight * (1 + shift * (k - lo) / 2) * (arch === 'runner' && has('s') ? ECON.swarmRunner : 1);
     w.push(v); sum += v;
   }
   let r = Math.random() * sum;
   for (let i = 0; i < w.length; i++) { r -= w[i]; if (r <= 0) return lo + i; }
   return hi;
 }
-const endlessBase = () => Math.min(MOBS.length - 3, 1 + Math.floor(G.t / 50));
-const curBase = () => (G.mode === 'camp' ? G.level : endlessBase());
+// В бесконечном со временем чаще идут сильные виды
+const curShift = () => (G.mode === 'camp' ? G.camp.wave : Math.min(3, G.t / 120));
+
+// Промежуточный моб: крупный и толстый, несёт оружие из набора на бой
+const runWeaponsLeft = () => SAVE.loadout.filter(id => !G.weapons[id] && WEAPONS[id]);
+const canGetWeapon = () => Object.keys(G.weapons).length + G.pendingWeapons < MAX_RUN_WEAPONS && runWeaponsLeft().length > G.pendingWeapons;
+function spawnElite() {
+  const e = spawnMob(mobLo() + 2);
+  e.elite = true;
+  e.hp = e.maxHp = e.hp * ECON.eliteHp;
+  e.r *= ECON.eliteSize; e.xp *= 5; e.speed *= 0.85;
+  addBanner('ПРОМЕЖУТОЧНЫЙ МОБ', 'Убей — получишь новое оружие', '#7df9ff');
+}
+
+// Стая бегунов с одной стороны (особенность «Стаи»)
+function spawnPack() {
+  const lo = mobLo();
+  let tier = lo;
+  for (let k = lo; k <= lo + 2; k++) if (MOBS[k - 1].arch === 'runner') tier = k;
+  const a = rand(0, TAU);
+  for (let i = 0; i < ECON.packSize; i++) spawnMob(tier, a + rand(-0.3, 0.3), spawnRadius() + rand(0, 40));
+  addBanner('СТАЯ!', '', '#ffd166');
+}
 
 // Кольцо врагов — герой окружён со всех сторон
 function spawnRing(tier, n) {
@@ -245,12 +291,14 @@ function spawnRing(tier, n) {
   addBanner('ОКРУЖЕНИЕ!', '', '#ff5d73');
 }
 
+// e.boss — поведение босса (golem / lich / hybrid), имя и цвет — из BOSSES
 function spawnBoss(kind, hpMul, dmgMul) {
   const B = BOSSES[kind], h = G.hero, a = rand(0, TAU), R = spawnRadius() - 20;
   addBanner('БОСС: ' + B.name.toUpperCase(), '', '#ffffff');
   return pushEnemy({
-    boss: kind, name: B.name, r: B.r, hp: B.hp * hpMul, speed: B.speed, dmg: Math.round(B.dmg * dmgMul),
-    color: B.color, shape: kind, xp: B.xp, ai: { t: 2.5, phase: 'walk', dx: 0, dy: 0, summon: 6 },
+    boss: B.ai, name: B.name, r: B.r, hp: B.hp * hpMul, speed: B.speed, dmg: Math.round(B.dmg * dmgMul),
+    color: B.color, shape: B.ai, xp: B.xp, armor: has('a') ? ECON.armor : 0,
+    ai: { t: 2.5, phase: 'walk', dx: 0, dy: 0, summon: 6, ring: 3 },
   }, h.x + Math.cos(a) * R, h.y + Math.sin(a) * R);
 }
 
@@ -260,20 +308,24 @@ function updateSpawns(dt) {
 }
 
 function updateEndlessSpawns(dt) {
-  const t = G.t, h = G.hero, base = endlessBase();
+  const t = G.t, h = G.hero;
   G.spawnAcc += dt * (1.2 + t / 14);
   while (G.spawnAcc >= 1) {
     G.spawnAcc -= 1;
-    if (G.enemies.length < 700) spawnMob(pickTier(base));
+    if (G.enemies.length < 700) spawnMob(pickTier(curShift()));
   }
   if (t >= G.nextSwarm) {
     G.nextSwarm += 60;
-    spawnRing(pickTier(base), Math.min(80, 24 + Math.floor(t / 6)));
+    spawnRing(pickTier(curShift()), Math.min(80, 24 + Math.floor(t / 6)));
+  }
+  if (t >= G.nextEliteT) {
+    G.nextEliteT += ECON.eliteEvery;
+    if (canGetWeapon()) spawnElite();
   }
   if (t >= G.nextElite) {
     G.nextElite += 120;
     const k = enemyScale();
-    spawnBoss(G.bossCount++ % 2 ? 'lich' : 'golem', k.hp, k.dmg);
+    spawnBoss(arena().bosses[G.bossCount++ % 2 ? 0 : 1], k.hp, k.dmg);
   }
   if (!G.hatch && t >= ECON.hatchAt) {
     const a = rand(0, TAU);
@@ -285,11 +337,37 @@ function updateEndlessSpawns(dt) {
 function updateCampSpawns(dt) {
   const c = G.camp, n = G.level;
   if (c.boss) return; // на боссе обычные мобы не приходят — только свита лича
-  G.spawnAcc += dt * ECON.spawnRate(n) * ECON.waveRate[c.wave];
+  G.spawnAcc += dt * ECON.spawnRate(n) * ECON.waveRate[c.wave] * (has('s') ? ECON.swarmRate : 1);
   while (G.spawnAcc >= 1) {
     G.spawnAcc -= 1;
-    if (G.enemies.length < 700) spawnMob(pickTier(n, c.wave));
+    if (G.enemies.length < 700) spawnMob(pickTier(c.wave));
   }
+  if (has('s') && G.t >= G.nextPack) {
+    G.nextPack += ECON.packEvery;
+    spawnPack();
+  }
+}
+
+// Особенность «Опасность»: рядом с героем время от времени появляются лужи яда / огня / разломы.
+// Первые 0.8 с лужа только проступает и не жжёт — от неё можно отойти.
+function updateHazards(dt) {
+  const h = G.hero, c = G.camp;
+  if (has('h') && !c.boss && c.won == null) {
+    G.hazardAcc += dt;
+    if (G.hazardAcc >= ECON.hazardEvery) {
+      G.hazardAcc = 0;
+      const a = rand(0, TAU), d = rand(30, 170);
+      G.hazards.push({ x: h.x + Math.cos(a) * d, y: h.y + Math.sin(a) * d, r: rand(26, 42), t: 0 });
+    }
+  }
+  for (const z of G.hazards) {
+    z.t += dt;
+    if (z.t > 0.8 && h.inv <= 0 && c.won == null && (z.x - h.x) ** 2 + (z.y - h.y) ** 2 < (z.r + h.r * 0.5) ** 2) {
+      damageHero(Math.round(ECON.hazardDmg * ECON.levelDmg(G.level) * DIFFS[G.diff].dmg));
+      if (G.state !== 'play') return;
+    }
+  }
+  G.hazards = G.hazards.filter(z => z.t < ECON.hazardLife);
 }
 
 // ------------------------------------------------------------
@@ -298,15 +376,20 @@ function updateCampSpawns(dt) {
 
 function updateCampaign() {
   const c = G.camp, n = G.level;
-  const p = Math.min(1, G.kills / c.target);
+  const p = Math.min(1, G.t / c.dur); // прогресс главы — по времени
   const wave = Math.min(3, Math.floor(p * 4));
   if (wave > c.wave) {
     c.wave = wave;
-    if (wave >= 2) spawnRing(pickTier(n, wave), 20 + 4 * n);
+    if (wave >= 2) spawnRing(pickTier(wave), 20 + 4 * Math.min(n, 30));
   }
-  if (c.got < 1 && p >= 0.25) { c.got = 1; campReward(ECON.reward25(n), '25% · МИНИ-НАГРАДА'); }
-  if (c.got < 2 && p >= 0.5) { c.got = 2; campReward(ECON.reward50(n), '50% · СРЕДНЯЯ НАГРАДА'); }
-  if (!c.boss && p >= 1) c.boss = spawnBoss(levelBoss(n), ECON.bossHp(n), ECON.levelDmg(n));
+  if (p >= ECON.eliteAt * (c.elites + 1) && c.elites < 7) {
+    c.elites++;
+    if (canGetWeapon()) spawnElite();
+  }
+  const D = DIFFS[G.diff], more = r => ({ ...r, gold: Math.round(r.gold * D.gold) });
+  if (c.got < 1 && p >= 0.25) { c.got = 1; campReward(more(ECON.reward25(n)), '25% · МИНИ-НАГРАДА'); }
+  if (c.got < 2 && p >= 0.5) { c.got = 2; campReward(more(ECON.reward50(n)), '50% · СРЕДНЯЯ НАГРАДА'); }
+  if (!c.boss && p >= 1) c.boss = spawnBoss(levelBoss(n), ECON.bossHp(n) * D.hp, ECON.levelDmg(n) * D.dmg);
 }
 
 // Вехи начисляются сразу: даже если герой погибнет, награда останется
@@ -323,7 +406,7 @@ function winLevel() {
   c.won = G.t;
   for (const e of G.enemies) if (!e.dead) { e.dead = true; burst(e.x, e.y, e.color, 3); }
   G.ebullets.length = 0;
-  addBanner('УРОВЕНЬ ПРОЙДЕН!', '', '#57e389');
+  addBanner('ГЛАВА ПРОЙДЕНА!', '', '#57e389');
 }
 
 // Конец забега: начисляем награды и показываем итог.
@@ -335,24 +418,30 @@ function finishRun(outcome) {
     for (const g of G.gems) if (g.kind === 'gold') G.gold += g.xp * h.goldMul;
   }
   let gold = Math.floor(G.gold);
-  const R = { outcome, mode: G.mode, level: G.level, time: G.t, kills: G.kills, coins: gold };
+  const R = { outcome, mode: G.mode, level: G.level, time: G.t, kills: G.kills, coins: gold, dmg: dmgRows('total') };
   if (G.mode === 'endless') {
+    questAdd('endless', G.t);
     if (outcome !== 'escape') { R.lost = gold - Math.floor(gold * ECON.deathKeep); gold -= R.lost; }
     grant({ gold });
     R.gold = gold;
     if (G.kills > SAVE.best.kills) { SAVE.best.kills = G.kills; R.record = true; }
     SAVE.best.time = Math.max(SAVE.best.time, G.t);
   } else {
-    const n = G.level;
+    const n = G.level, key = clearKey(n, G.diff);
+    R.diff = G.diff;
     grant({ gold });
     R.gold = gold + c.earned.gold;
     R.shards = c.earned.shards;
-    R.progress = Math.min(1, G.kills / c.target);
+    R.progress = Math.min(1, G.t / c.dur);
     if (outcome === 'win') {
-      const first = !SAVE.cleared[n];
-      const r = bossReward(n, first);
+      questAdd('wins');
+      const first = !SAVE.cleared[key];
+      const r = bossReward(n, first, G.diff);
       grant(r);
-      SAVE.cleared[n] = (SAVE.cleared[n] || 0) + 1;
+      R.puzzles = grantReward({ puzzles: r.puzzles });
+      const opensNext = G.diff < DIFFS.length - 1 && !SAVE.cleared[key];
+      SAVE.cleared[key] = (SAVE.cleared[key] || 0) + 1;
+      if (opensNext) R.nextDiff = G.diff + 1;
       const was = SAVE.unlocked;
       SAVE.unlocked = Math.max(SAVE.unlocked, Math.min(CAMPAIGN_LEVELS, n + 1));
       R.opened = Object.keys(UNLOCKS).filter(id => was < UNLOCKS[id] && SAVE.unlocked >= UNLOCKS[id]);
@@ -387,24 +476,56 @@ function burst(x, y, color, n) {
   }
 }
 
-function hurt(e, base, kbx = 0, kby = 0) {
+// src — кто бьёт (id оружия или 'pet'), для статистики урона
+function hurt(e, base, kbx = 0, kby = 0, src) {
   if (e.dead) return;
-  const dmg = Math.max(1, Math.round(base * G.hero.dmgMul * rand(0.85, 1.15)));
+  const h = G.hero, crit = Math.random() < h.critChance;
+  const dmg = Math.max(1, Math.round(base * h.dmgMul * (crit ? h.critMul : 1) * (1 - (e.armor || 0)) * rand(0.85, 1.15)));
+  trackDamage(src, Math.min(dmg, Math.max(0, e.hp))); // в зачёт идёт только реально снятое HP
   e.hp -= dmg;
   e.flash = 0.08;
   const kb = e.boss ? 0.1 : 1; // боссов почти не отбрасывает
   e.kx += kbx * kb; e.ky += kby * kb;
-  if (S.dmgText) addText(e.x, e.y - e.r, String(dmg));
+  if (S.dmgText) addText(e.x, e.y - e.r, String(dmg), crit ? '#ffd166' : '#fff', 0.6, crit ? 11 : 9);
   if (e.hp <= 0) killEnemy(e);
 }
+
+// Статистика урона: сумма за бой и корзины по секундам для «урон/с за 10 с»
+function trackDamage(src, d) {
+  if (!src || !d) return;
+  const st = G.stats, sec = Math.floor(G.t), i = sec % 10;
+  st.total[src] = (st.total[src] || 0) + d;
+  const b = st.sec[src] || (st.sec[src] = { v: new Array(10).fill(0), at: new Array(10).fill(-1) });
+  if (b.at[i] !== sec) { b.at[i] = sec; b.v[i] = 0; }
+  b.v[i] += d;
+}
+function dpsOf(src) {
+  const b = G.stats.sec[src], sec = Math.floor(G.t);
+  if (!b) return 0;
+  let sum = 0;
+  for (let i = 0; i < 10; i++) if (b.at[i] > sec - 10) sum += b.v[i];
+  return sum / Math.min(10, Math.max(1, G.t));
+}
+const srcName = src => (src === 'pet' ? PETS[SAVE.pet].name : WEAPONS[src].name);
+const srcColor = src => (src === 'pet' ? '#fff3a0' : WEAPONS[src].color);
+// Строки таблицы урона: оружие в бою (даже с нулём) и питомец, по убыванию
+function dmgRows(mode) {
+  const srcs = new Set([...Object.keys(G.weapons), ...Object.keys(G.stats.total)]);
+  const rows = [...srcs].map(src => ({ src, v: mode === 'dps' ? dpsOf(src) : G.stats.total[src] || 0 }));
+  return rows.sort((a, b) => b.v - a.v);
+}
+const fmtNum = n => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? Math.round(n / 1e3) + 'K' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(Math.round(n)));
 
 function killEnemy(e) {
   e.dead = true;
   G.kills++;
+  questAdd('kills');
+  if (e.elite) { questAdd('elites'); if (canGetWeapon()) G.pendingWeapons++; }
+  if (e.boss) questAdd('bosses');
   burst(e.x, e.y, e.color, e.boss ? 30 : 5);
   G.gems.push({ x: e.x, y: e.y, xp: e.xp, kind: 'xp' });
   if (e.boss || Math.random() < (G.mode === 'camp' ? ECON.coinChance : ECON.endlessCoinChance)) {
-    const v = G.mode === 'camp' ? ECON.campCoin(G.level) : ECON.endlessCoin(G.t, SAVE.unlocked);
+    const v = G.mode === 'camp' ? ECON.campCoin(G.level) * DIFFS[G.diff].gold : ECON.endlessCoin(G.t, SAVE.unlocked);
     G.gems.push({ x: e.x + rand(-8, 8), y: e.y + rand(-8, 8), xp: v * (e.boss ? 10 : 1), kind: 'gold' });
   }
   if (e.boss || Math.random() < 0.006) {
@@ -412,12 +533,11 @@ function killEnemy(e) {
   }
   if (G.mode === 'camp') {
     if (e === G.camp.boss) winLevel();
-    else if (G.camp.won == null) updateCampaign();
   }
 }
 
-function shoot(x, y, ang, speed, dmg, pierce, color, r) {
-  G.bullets.push({ x, y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg, pierce, color, r, life: 1.6, hit: new Set(), dead: false });
+function shoot(x, y, ang, speed, dmg, pierce, color, r, src) {
+  G.bullets.push({ x, y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg, pierce, color, r, src, life: 1.6, hit: new Set(), dead: false });
 }
 
 function shootEnemy(x, y, ang, speed, dmg) {
@@ -435,25 +555,50 @@ function nearestEnemies(n, range, from = G.hero) {
   return list.slice(0, n).map(p => p[1]);
 }
 
-const orbitCount = l => WEAPONS.orbit.stats(l).count + medalLvl('bladeExtra');
+// Характеристики оружия в бою: улучшения забега + медальоны + герой (стартовый бонус эволюции и активка)
+const activeOn = id => G.active.t > 0 && id === heroWeapon();
+function wStats(id) {
+  const s = WEAPONS[id].stats(G.weapons[id]), ev = G.evo, on = activeOn(id);
+  const start = id === heroWeapon() ? ev.start : 0;
+  if (id === 'wand') { s.volley += 0.25 * medalLvl('wandDouble'); s.count += start; if (on) { s.cd *= 0.5; s.count += ev.extra; } }
+  if (id === 'orbit') { s.count += medalLvl('bladeExtra') + start; if (on) s.count += ev.extra; }
+  if (id === 'aura') { s.radius += 12 * start; if (on) s.radius = s.radius * 1.5 + 12 * ev.extra; }
+  if (id === 'nova') { s.volley += 0.25 * medalLvl('novaDouble'); s.count += 3 * start; if (on) { s.cd *= 0.33; s.count += 3 * ev.extra; } }
+  return s;
+}
+// Урон оружия: мета-уровень, пассивки героев и активка
+const weaponDmg = (id, base) => metaDmg(id, base) * (G.heroBonus[id] || 1) * (activeOn(id) ? 1 + G.evo.act / 100 : 1);
+
+// Активка героя: усиливает его оружие на несколько секунд
+function useActive() {
+  const a = G.active, ev = G.evo, h = G.hero;
+  if (G.state !== 'play' || a.cd > 0) return;
+  a.t = ev.dur;
+  a.cd = ev.cd;
+  questAdd('actives');
+  if (SAVE.hero === 'eliana') h.hp = Math.min(h.maxHp, h.hp + h.maxHp * 0.15);
+  addBanner(HEROES[SAVE.hero].active.toUpperCase() + '!', '', WEAPONS[heroWeapon()].color);
+}
 
 function updateWeapons(dt) {
   const h = G.hero, w = G.weapons, T = G.timers;
+  const a = G.active;
+  if (a.t > 0) a.t = Math.max(0, a.t - dt);
+  else if (a.cd > 0) a.cd = Math.max(0, a.cd - dt);
 
   if (w.wand) {
-    const s = WEAPONS.wand.stats(w.wand), dmg = metaDmg('wand', s.dmg);
+    const s = wStats('wand'), dmg = weaponDmg('wand', s.dmg);
     T.wand = (T.wand || 0) - dt;
     if (T.wand <= 0) {
       const tg = nearestEnemies(s.count, 380);
       if (tg.length) {
         T.wand = s.cd * h.cdMul;
-        // Медальон «Двойной залп» — шанс выстрелить ещё раз со сдвигом
-        const volleys = Math.random() < 0.25 * medalLvl('wandDouble') ? 2 : 1;
+        const volleys = Math.random() < s.volley ? 2 : 1;
         for (let v = 0; v < volleys; v++) {
           for (let i = 0; i < s.count; i++) {
             const e = tg[i % tg.length];
             const a = Math.atan2(e.y - h.y, e.x - h.x) + (i >= tg.length ? rand(-0.25, 0.25) : 0) + v * 0.15;
-            shoot(h.x, h.y, a, 330, dmg, s.pierce, WEAPONS.wand.color, 4);
+            shoot(h.x, h.y, a, 330, dmg, s.pierce, WEAPONS.wand.color, 4, 'wand');
           }
         }
       }
@@ -461,7 +606,7 @@ function updateWeapons(dt) {
   }
 
   if (w.orbit) {
-    const s = WEAPONS.orbit.stats(w.orbit), n = orbitCount(w.orbit), dmg = metaDmg('orbit', s.dmg);
+    const s = wStats('orbit'), n = s.count, dmg = weaponDmg('orbit', s.dmg);
     G.orbAng += s.spin * dt;
     for (let i = 0; i < n; i++) {
       const a = G.orbAng + (i / n) * TAU;
@@ -472,33 +617,36 @@ function updateWeapons(dt) {
         if (dx * dx + dy * dy < (e.r + 9) ** 2) {
           const d = Math.hypot(e.x - h.x, e.y - h.y) || 1;
           e.orbCd = G.t + 0.35;
-          hurt(e, dmg, (e.x - h.x) / d * 140, (e.y - h.y) / d * 140);
+          hurt(e, dmg, (e.x - h.x) / d * s.push, (e.y - h.y) / d * s.push, 'orbit');
         }
       }
     }
   }
 
   if (w.aura) {
-    const s = WEAPONS.aura.stats(w.aura);
+    const s = wStats('aura');
     T.aura = (T.aura || 0) - dt;
     if (T.aura <= 0) {
-      T.aura = s.tick;
-      const dmg = metaDmg('aura', s.dmg);
+      T.aura = s.tick * h.cdMul;
+      const dmg = weaponDmg('aura', s.dmg);
       for (const e of query(h.x, h.y, s.radius + MAX_ER, near)) {
-        if ((e.x - h.x) ** 2 + (e.y - h.y) ** 2 < (s.radius + e.r) ** 2) hurt(e, dmg);
+        if ((e.x - h.x) ** 2 + (e.y - h.y) ** 2 < (s.radius + e.r) ** 2) {
+          if (s.slow) { e.slowK = s.slow; e.slowT = G.t + 0.6; }
+          hurt(e, dmg, 0, 0, 'aura');
+        }
       }
     }
   }
 
   if (w.nova) {
-    const s = WEAPONS.nova.stats(w.nova);
+    const s = wStats('nova');
     T.nova = (T.nova || 0) - dt;
     if (T.nova <= 0) {
       T.nova = s.cd * h.cdMul;
-      const off = rand(0, TAU), dmg = metaDmg('nova', s.dmg);
-      const rings = Math.random() < 0.25 * medalLvl('novaDouble') ? 2 : 1;
+      const off = rand(0, TAU), dmg = weaponDmg('nova', s.dmg);
+      const rings = Math.random() < s.volley ? 2 : 1;
       for (let v = 0; v < rings; v++) {
-        for (let i = 0; i < s.count; i++) shoot(h.x, h.y, off + (i + v * 0.5) / s.count * TAU, 220, dmg, 1, WEAPONS.nova.color, 5);
+        for (let i = 0; i < s.count; i++) shoot(h.x, h.y, off + (i + v * 0.5) / s.count * TAU, 220, dmg, 1, WEAPONS.nova.color, 5, 'nova');
       }
     }
   }
@@ -517,7 +665,7 @@ function updatePet(dt) {
       const tg = nearestEnemies(1, 260, p)[0];
       if (tg) {
         p.cd = 1.3;
-        shoot(p.x, p.y, Math.atan2(tg.y - p.y, tg.x - p.x), 300, metaDmg(SAVE.startWeapon, 6), 1, '#fff3a0', 3);
+        shoot(p.x, p.y, Math.atan2(tg.y - p.y, tg.x - p.x), 300, metaDmg(heroWeapon(), 6), 1, '#fff3a0', 3, 'pet');
       }
     }
   }
@@ -533,7 +681,7 @@ function updateBullets(dt) {
       if ((e.x - b.x) ** 2 + (e.y - b.y) ** 2 < (e.r + b.r) ** 2) {
         b.hit.add(e);
         const sp = Math.hypot(b.vx, b.vy);
-        hurt(e, b.dmg, b.vx / sp * 90, b.vy / sp * 90);
+        hurt(e, b.dmg, b.vx / sp * 90, b.vy / sp * 90, b.src);
         if (--b.pierce <= 0) { b.dead = true; break; }
       }
     }
@@ -561,7 +709,9 @@ function updateEnemyBullets(dt) {
 function updateBoss(e, dt, dx, dy, d) {
   const ai = e.ai;
   ai.t -= dt;
-  if (e.boss === 'golem') {
+  if (e.boss !== 'lich') {
+    // Босс локации (hybrid) ходит как голем, но ещё стреляет кольцами и зовёт свиту
+    if (e.boss === 'hybrid') bossCast(e, dt, 3.6, 11);
     if (ai.phase === 'walk') {
       e.x += dx / d * e.speed * dt; e.y += dy / d * e.speed * dt;
       if (ai.t <= 0 && d < 320) { ai.phase = 'aim'; ai.t = 0.7; ai.dx = dx / d; ai.dy = dy / d; }
@@ -576,17 +726,24 @@ function updateBoss(e, dt, dx, dy, d) {
   const dir = d > 170 ? 1 : d < 120 ? -1 : 0;
   e.x += (dx / d * dir - dy / d * 0.5) * e.speed * dt;
   e.y += (dy / d * dir + dx / d * 0.5) * e.speed * dt;
-  if (ai.t <= 0) {
-    ai.t = 2.6;
+  bossCast(e, dt, 2.6, 9);
+}
+
+// Кольцо снарядов раз в ringCd секунд и четыре моба свиты раз в summonCd
+function bossCast(e, dt, ringCd, summonCd) {
+  const ai = e.ai;
+  ai.ring -= dt;
+  if (ai.ring <= 0) {
+    ai.ring = ringCd;
     const off = rand(0, TAU);
     for (let i = 0; i < 12; i++) shootEnemy(e.x, e.y, off + i / 12 * TAU, 120, Math.round(e.dmg * 0.6));
   }
   ai.summon -= dt;
   if (ai.summon <= 0) {
-    ai.summon = 9;
+    ai.summon = summonCd;
     for (let i = 0; i < 4; i++) {
       const a = i / 4 * TAU;
-      makeMob(pickTier(curBase()), e.x + Math.cos(a) * 30, e.y + Math.sin(a) * 30);
+      makeMob(pickTier(curShift()), e.x + Math.cos(a) * 30, e.y + Math.sin(a) * 30);
     }
   }
 }
@@ -603,7 +760,20 @@ function updateEnemies(dt) {
       continue;
     }
     if (e.boss) updateBoss(e, dt, dx, dy, d);
-    else { e.x += dx / d * e.speed * dt; e.y += dy / d * e.speed * dt; }
+    else if (e.shoot) {
+      // Стрелок держит дистанцию, обходит героя по кругу и стреляет
+      const dir = d > 190 ? 1 : d < 140 ? -1 : 0;
+      e.x += (dx / d * dir - dy / d * 0.4) * e.speed * dt;
+      e.y += (dy / d * dir + dx / d * 0.4) * e.speed * dt;
+      e.shoot -= dt;
+      if (e.shoot <= 0) {
+        e.shoot = ECON.shooterCd;
+        if (d < 320) shootEnemy(e.x, e.y, Math.atan2(dy, dx), 130, Math.max(1, Math.round(e.dmg * 0.7)));
+      }
+    } else {
+      const sp = e.speed * (e.slowT > G.t ? 1 - e.slowK : 1);
+      e.x += dx / d * sp * dt; e.y += dy / d * sp * dt;
+    }
     e.x += e.kx * dt; e.y += e.ky * dt;
     const damp = Math.min(1, 10 * dt);
     e.kx -= e.kx * damp; e.ky -= e.ky * damp;
@@ -714,45 +884,74 @@ function gainXp(n) {
 //  Прокачка внутри забега
 // ------------------------------------------------------------
 
+const shuffle = a => {
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+};
+
+// Новый уровень: 3 улучшения взятого оружия (разные) и 1 характеристика героя
 function rollChoices() {
-  const pool = [];
-  for (const id in WEAPONS) {
-    const l = G.weapons[id] || 0;
-    if (l < WEAPONS[id].max) pool.push({ kind: 'w', id, lvl: l + 1 });
+  const ups = [], stats = [];
+  for (const id in G.weapons) {
+    for (const k in WEAPONS[id].ups) if (G.weapons[id][k] < WEAPONS[id].ups[k].max) ups.push({ kind: 'u', id, up: k });
   }
   for (const id in PASSIVES) {
     const l = G.passives[id] || 0;
-    if (l < PASSIVES[id].max) pool.push({ kind: 'p', id, lvl: l + 1 });
+    if (l < PASSIVES[id].max) stats.push({ kind: 'p', id, lvl: l + 1 });
   }
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  const res = pool.slice(0, 3);
-  if (!res.length) res.push({ kind: 'f', id: 'food', lvl: 0 });
+  const res = shuffle(ups).slice(0, 3).concat(shuffle(stats).slice(0, 1));
+  if (!res.length) res.push({ kind: 'f', id: 'food' });
   return res;
 }
 
+// Промежуточный моб убит: 3 оружия из набора на бой
+const rollWeapons = () => shuffle(runWeaponsLeft()).slice(0, 3).map(id => ({ kind: 'w', id }));
+
 function choiceView(c) {
+  if (c.kind === 'u') {
+    const W = WEAPONS[c.id], U = W.ups[c.up];
+    return { name: `${W.name}: ${U.name}`, color: W.color, tag: `${G.weapons[c.id][c.up] + 1}/${U.max}`, info: U.info, icon: c.id };
+  }
   if (c.kind === 'w') {
-    const d = WEAPONS[c.id];
-    return { name: d.name, color: d.color, tag: c.lvl === 1 ? 'НОВОЕ' : 'Ур. ' + c.lvl, info: d.info[c.lvl - 1] };
+    const W = WEAPONS[c.id];
+    return { name: W.name, color: W.color, tag: 'НОВОЕ', info: W.info, icon: c.id };
   }
   if (c.kind === 'p') {
     const d = PASSIVES[c.id];
-    return { name: d.name, color: d.color, tag: c.lvl === 1 ? 'НОВОЕ' : 'Ур. ' + c.lvl, info: d.info };
+    return { name: d.name, color: d.color, tag: 'Ур. ' + c.lvl, info: d.info };
   }
   return { name: 'Еда', color: '#57e389', tag: '', info: 'Восстановить 50% HP' };
 }
 
-function pickChoice(c) {
+function applyChoice(c) {
   const h = G.hero;
-  if (c.kind === 'w') G.weapons[c.id] = c.lvl;
+  if (c.kind === 'u') G.weapons[c.id][c.up]++;
+  else if (c.kind === 'w') G.weapons[c.id] = newUps(c.id);
   else if (c.kind === 'p') { G.passives[c.id] = c.lvl; PASSIVES[c.id].apply(h); }
   else h.hp = Math.min(h.maxHp, h.hp + h.maxHp * 0.5);
-  G.pendingLevels--;
+}
+
+function pickChoice(c) {
+  applyChoice(c);
+  closeChoices();
+}
+function closeChoices() {
+  if (G.state === 'weaponpick') G.pendingWeapons--;
+  else G.pendingLevels--;
   G.choices = null;
   setState('play');
+}
+// «Взять все» на новом уровне (за рекламу)
+function pickAll() {
+  for (const c of G.choices) applyChoice(c);
+  closeChoices();
+}
+// «Новый набор»: первый раз за бой бесплатно, дальше за рекламу
+function rerollChoices(free) {
+  const k = G.state === 'weaponpick' ? 'weapon' : 'up';
+  if (free) G.rerolls[k]++;
+  G.choices = k === 'weapon' ? rollWeapons() : rollChoices();
+  G.stateAt = performance.now();
 }
 
 // ------------------------------------------------------------
@@ -776,6 +975,7 @@ function update(dt) {
   if (c && c.won != null) {
     if (G.t - c.won > 1.2) { finishRun('win'); return; }
   } else {
+    if (c) updateCampaign();
     updateSpawns(dt);
   }
   buildGrid();
@@ -788,13 +988,19 @@ function update(dt) {
   updateBullets(dt);
   updateEnemyBullets(dt);
   if (G.state !== 'play') return;
+  if (G.camp) { updateHazards(dt); if (G.state !== 'play') return; }
   G.enemies = G.enemies.filter(e => !e.dead);
   updateGems(dt);
 
   const h = G.hero;
   if (G.hatch && Math.hypot(G.hatch.x - h.x, G.hatch.y - h.y) < 18) { finishRun('escape'); return; }
 
-  if (G.pendingLevels > 0) {
+  if (G.pendingWeapons > 0) {
+    G.choices = rollWeapons();
+    if (!G.choices.length) { G.pendingWeapons = 0; return; }
+    setState('weaponpick');
+    joy = null;
+  } else if (G.pendingLevels > 0) {
     G.choices = rollChoices();
     setState('levelup');
     joy = null;
@@ -824,8 +1030,8 @@ const HERO_PAL = { 0: '#14141c', 1: '#f2c9a0', 2: '#14141c', 3: '#3e8ef7', 4: '#
 const PX = 2.4;
 
 // Пиксельный герой с центром в (x, y); px — размер пикселя
-function drawHeroSprite(x, y, px, face, legs, skin, outfit) {
-  const pal = { ...HERO_PAL, ...SKINS[skin].pal };
+function drawHeroSprite(x, y, px, face, legs, hero, outfit) {
+  const pal = { ...HERO_PAL, ...HEROES[hero].pal };
   const hat = OUTFITS[outfit].rows;
   const rows = hat.concat(HERO_BODY, HERO_LEGS[legs]);
   const ox = x - 4 * px, oy = y - (HERO_BODY.length + 2) * px / 2 - 2 - hat.length * px;
@@ -843,7 +1049,7 @@ function drawHero(h) {
   if (h.inv > 0 && Math.floor(h.inv * 20) % 2) return;
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath(); ctx.ellipse(h.x, h.y + 12, 8, 3, 0, 0, TAU); ctx.fill();
-  drawHeroSprite(h.x, h.y, PX, h.face, h.walk > 0 ? Math.floor(h.walk * 8) % 2 : 0, SAVE.skin, SAVE.outfit);
+  drawHeroSprite(h.x, h.y, PX, h.face, h.walk > 0 ? Math.floor(h.walk * 8) % 2 : 0, SAVE.hero, SAVE.outfit);
 }
 
 function drawPetSprite(kind, x, y, s = 1) {
@@ -885,7 +1091,7 @@ function drawEyes(e, color = 'rgba(0,0,0,0.4)') {
 
 function drawBoss(e) {
   const r = e.r, flash = e.flash > 0;
-  if (e.boss === 'golem') {
+  if (e.boss !== 'lich') {
     // Линия-предупреждение перед рывком
     if (e.ai.phase === 'aim') {
       ctx.strokeStyle = 'rgba(255,93,115,0.5)';
@@ -900,6 +1106,13 @@ function drawBoss(e) {
     ctx.fillStyle = e.ai.phase === 'walk' ? '#ff9f1c' : '#ff3b3b';
     ctx.fillRect(e.x - r * 0.5, e.y - r * 0.4, r * 0.3, r * 0.22);
     ctx.fillRect(e.x + r * 0.2, e.y - r * 0.4, r * 0.3, r * 0.22);
+    if (e.boss === 'hybrid') {
+      // Корона босса локации
+      ctx.fillStyle = '#ffd166';
+      ctx.fillRect(e.x - r * 0.6, e.y - r - 4, r * 1.2, 5);
+      for (let i = -1; i <= 1; i++) ctx.fillRect(e.x + i * r * 0.45 - 3, e.y - r - 12, 6, 9);
+    }
+    if (e.armor) armorRing(e);
     return;
   }
   const bob = Math.sin(G.t * 3) * 2;
@@ -913,6 +1126,13 @@ function drawBoss(e) {
   ctx.fillStyle = '#80ffdb';
   ctx.fillRect(e.x - r * 0.3, e.y - r * 0.45 + bob, r * 0.18, r * 0.14);
   ctx.fillRect(e.x + r * 0.12, e.y - r * 0.45 + bob, r * 0.18, r * 0.14);
+  if (e.armor) armorRing(e);
+}
+
+// Серое кольцо вокруг бронированного врага
+function armorRing(e) {
+  ctx.strokeStyle = 'rgba(184,192,204,0.7)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 3, 0, TAU); ctx.stroke();
 }
 
 function drawEnemy(e) {
@@ -935,7 +1155,19 @@ function drawEnemy(e) {
     ctx.beginPath(); ctx.arc(e.x, e.y, r, 0, TAU); ctx.fill();
     drawEyes(e);
   }
-  if (e.arch === 'tank' || e.arch === 'brute') {
+  if (e.armor) armorRing(e);
+  if (e.shoot) {
+    // Стрелок: светлая метка-прицел в центре
+    ctx.fillStyle = '#f0d8ff';
+    ctx.beginPath(); ctx.arc(e.x, e.y + r * 0.35, Math.max(2, r * 0.25), 0, TAU); ctx.fill();
+  }
+  if (e.elite) {
+    // Промежуточный моб: маленькая корона
+    ctx.fillStyle = '#7df9ff';
+    ctx.fillRect(e.x - r * 0.5, e.y - r - 12, r, 4);
+    for (let i = -1; i <= 1; i++) ctx.fillRect(e.x + i * r * 0.4 - 2, e.y - r - 17, 4, 6);
+  }
+  if (e.arch === 'tank' || e.arch === 'brute' || e.elite) {
     const w = r * 2;
     ctx.fillStyle = '#000';
     ctx.fillRect(e.x - r, e.y - r - 7, w, 3);
@@ -981,13 +1213,13 @@ function crackPath(x, y, r, seed) {
 }
 
 const DECOR = {
-  grass(px, py, r) {
+  grass(px, py, r, now, P) {
     const S = DECOR_STEP;
     // Пятна травы чуть светлее/темнее фона
-    if (r(1) < 0.3) blob(px + r(2) * S, py + r(3) * S, 18 + r(4) * 26, 10 + r(5) * 14, r(6) < 0.5 ? '#141e15' : '#0d130e');
+    if (r(1) < 0.3) blob(px + r(2) * S, py + r(3) * S, 18 + r(4) * 26, 10 + r(5) * 14, P.patch[r(6) < 0.5 ? 0 : 1]);
     // Пучки травы
     const n = Math.floor(r(7) * 4);
-    ctx.strokeStyle = '#26391f'; ctx.lineWidth = 1.2;
+    ctx.strokeStyle = P.tuft; ctx.lineWidth = 1.2;
     ctx.beginPath();
     for (let i = 0; i < n; i++) {
       const gx = px + r(10 + i) * S, gy = py + r(20 + i) * S;
@@ -996,51 +1228,51 @@ const DECOR = {
       ctx.moveTo(gx, gy); ctx.lineTo(gx + 2.5, gy - 5);
     }
     ctx.stroke();
-    if (r(30) < 0.1) stone(px + r(31) * S, py + r(32) * S, 3 + r(33) * 4, '#2a2f2b', '#383e39');
+    if (r(30) < 0.1) stone(px + r(31) * S, py + r(32) * S, 3 + r(33) * 4, P.stone[0], P.stone[1]);
     // Куст
     if (r(40) < 0.07) {
       const bx = px + r(41) * S, by = py + r(42) * S;
       blob(bx, by + 6, 14, 4, 'rgba(0,0,0,0.3)');
-      ctx.fillStyle = '#1a2b19';
+      ctx.fillStyle = P.bush[0];
       ctx.beginPath(); ctx.arc(bx - 6, by, 7, 0, TAU); ctx.arc(bx + 6, by, 7, 0, TAU); ctx.arc(bx, by - 5, 8, 0, TAU); ctx.fill();
-      ctx.fillStyle = '#233a20';
+      ctx.fillStyle = P.bush[1];
       ctx.beginPath(); ctx.arc(bx - 7, by - 2, 3.5, 0, TAU); ctx.arc(bx - 1, by - 8, 4, 0, TAU); ctx.fill();
     }
     // Цветы
     if (r(50) < 0.1) {
-      ctx.fillStyle = ['#7d7444', '#6f5470', '#566b8a'][Math.floor(r(51) * 3)];
+      ctx.fillStyle = P.flowers[Math.floor(r(51) * 3)];
       for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(px + r(52 + i) * S, py + r(56 + i) * S, 1.4, 0, TAU); ctx.fill(); }
     }
   },
 
-  crypt(px, py, r) {
+  crypt(px, py, r, now, P) {
     const S = DECOR_STEP, T = S / 2;
     // Плиты пола 2×2 на клетку, щели — цвет фона
     for (let i = 0; i < 4; i++) {
-      ctx.fillStyle = ['#15111d', '#131019', '#18131f'][Math.floor(r(1 + i) * 3)];
+      ctx.fillStyle = P.tiles[Math.floor(r(1 + i) * 3)];
       ctx.fillRect(px + (i % 2) * T + 1, py + (i >> 1) * T + 1, T - 2, T - 2);
     }
     if (r(10) < 0.2) {
-      ctx.strokeStyle = '#0b0910'; ctx.lineWidth = 1.2;
+      ctx.strokeStyle = P.crack; ctx.lineWidth = 1.2;
       crackPath(px + r(11) * S, py + r(12) * S, r, 13); ctx.stroke();
     }
     // Обломки
-    if (r(30) < 0.15) for (let i = 0; i < 3; i++) blob(px + r(31 + i) * S, py + r(35 + i) * S, 1.5 + r(39 + i) * 2, 1.2 + r(39 + i) * 1.5, '#221c2c');
+    if (r(30) < 0.15) for (let i = 0; i < 3; i++) blob(px + r(31 + i) * S, py + r(35 + i) * S, 1.5 + r(39 + i) * 2, 1.2 + r(39 + i) * 1.5, P.debris);
     // Кость
     if (r(50) < 0.06) {
       const bx = px + r(51) * S, by = py + r(52) * S, a = r(53) * TAU, dx = Math.cos(a) * 6, dy = Math.sin(a) * 6;
-      ctx.strokeStyle = '#3a3446'; ctx.lineWidth = 2.2;
+      ctx.strokeStyle = P.bone; ctx.lineWidth = 2.2;
       ctx.beginPath(); ctx.moveTo(bx - dx, by - dy); ctx.lineTo(bx + dx, by + dy); ctx.stroke();
-      ctx.fillStyle = '#3a3446';
+      ctx.fillStyle = P.bone;
       for (const k of [-1, 1]) { ctx.beginPath(); ctx.arc(bx + dx * k, by + dy * k, 2, 0, TAU); ctx.fill(); }
     }
     // Череп
     if (r(60) < 0.025) {
       const sx = px + r(61) * S, sy = py + r(62) * S;
-      ctx.fillStyle = '#3d3749';
+      ctx.fillStyle = P.skull;
       ctx.beginPath(); ctx.arc(sx, sy, 5, 0, TAU); ctx.fill();
       ctx.fillRect(sx - 3, sy + 3, 6, 3.5);
-      ctx.fillStyle = '#0b0910';
+      ctx.fillStyle = P.crack;
       ctx.fillRect(sx - 3, sy - 1, 2, 2); ctx.fillRect(sx + 1, sy - 1, 2, 2);
     }
   },
@@ -1085,13 +1317,13 @@ const DECOR = {
 };
 
 function drawDecor(h, vw, vh) {
-  const draw = DECOR[arena().decor], st = DECOR_STEP, now = performance.now() / 1000;
+  const draw = DECOR[arena().decor], P = arena().pal, st = DECOR_STEP, now = performance.now() / 1000;
   // +1 клетка с каждой стороны: крупный декор вылезает за границы своей клетки
   const x0 = Math.floor((h.x - vw) / st) - 1, x1 = Math.floor((h.x + vw) / st) + 1;
   const y0 = Math.floor((h.y - vh) / st) - 1, y1 = Math.floor((h.y + vh) / st) + 1;
   for (let cx = x0; cx <= x1; cx++) {
     for (let cy = y0; cy <= y1; cy++) {
-      draw(cx * st, cy * st, i => hash2(cx, cy, i), now);
+      draw(cx * st, cy * st, i => hash2(cx, cy, i), now, P);
     }
   }
 }
@@ -1242,11 +1474,11 @@ function drawWorld() {
   const inView = o => Math.abs(o.x - cam.x) < vw && Math.abs(o.y - cam.y) < vh;
 
   if (menu) drawShelter(vw, vh);
-  else drawDecor(cam, vw, vh);
+  else { drawDecor(cam, vw, vh); drawHazards(inView); }
   if (G.hatch) drawHatch(G.hatch.x, G.hatch.y);
 
   if (G.weapons.aura) {
-    const s = WEAPONS.aura.stats(G.weapons.aura);
+    const s = wStats('aura');
     const pulse = 1 + Math.sin(G.t * 6) * 0.03;
     ctx.fillStyle = 'rgba(255,138,76,0.10)';
     ctx.strokeStyle = 'rgba(255,138,76,0.45)';
@@ -1281,7 +1513,7 @@ function drawWorld() {
   if (SAVE.pet !== 'none') drawPetSprite(SAVE.pet, G.state === 'menu' ? h.x - 18 : G.pet.x, G.state === 'menu' ? h.y - 14 : G.pet.y);
 
   if (G.weapons.orbit) {
-    const s = WEAPONS.orbit.stats(G.weapons.orbit), n = orbitCount(G.weapons.orbit);
+    const s = wStats('orbit'), n = s.count;
     for (let i = 0; i < n; i++) {
       const a = G.orbAng + (i / n) * TAU;
       const bx = h.x + Math.cos(a) * s.radius, by = h.y + Math.sin(a) * s.radius;
@@ -1333,6 +1565,21 @@ function drawWorld() {
   ctx.globalAlpha = 1;
 }
 
+// Лужи опасности: сначала проступают (ещё не жгут), в конце гаснут
+function drawHazards(inView) {
+  if (!G.hazards.length) return;
+  const rgb = HAZARDS[arena().hazard].rgb;
+  for (const z of G.hazards) {
+    if (!inView(z)) continue;
+    const armed = z.t > 0.8, fade = clamp((ECON.hazardLife - z.t) / 0.6, 0, 1) * clamp(z.t / 0.8, 0.3, 1);
+    const pulse = 1 + Math.sin(G.t * 5 + z.x) * 0.04;
+    ctx.fillStyle = `rgba(${rgb},${(armed ? 0.28 : 0.1) * fade})`;
+    ctx.strokeStyle = `rgba(${rgb},${0.7 * fade})`;
+    ctx.lineWidth = armed ? 2 : 1;
+    ctx.beginPath(); ctx.arc(z.x, z.y, z.r * pulse, 0, TAU); ctx.fill(); ctx.stroke();
+  }
+}
+
 // ------------------------------------------------------------
 //  HUD
 // ------------------------------------------------------------
@@ -1357,7 +1604,7 @@ function drawHud() {
   ctx.font = 'bold 15px system-ui, sans-serif';
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
-  ctx.fillText(c ? 'Уровень ' + G.level : fmtTime(G.t), W / 2, top + 16);
+  ctx.fillText(c ? `Глава ${G.level}` + (G.diff ? ' · ' + DIFFS[G.diff].name : '') : fmtTime(G.t), W / 2, top + 16);
   ctx.textAlign = 'left';
   ctx.font = 'bold 13px system-ui, sans-serif';
   ctx.fillText('Герой ' + h.level, 12, top + 16);
@@ -1375,11 +1622,12 @@ function drawHud() {
   ctx.fillRect(pb.x + 12, pb.y + 10, 4, 16);
   ctx.fillRect(pb.x + 20, pb.y + 10, 4, 16);
   ui.push(pb);
+  drawDmgPanel(top + 112);
 
   // Прогресс уровня кампании с отметками наград на 25% и 50%
   let y = top + 40;
   if (c) {
-    const bw = Math.min(W * 0.46, 280), bx = (W - bw) / 2, p = Math.min(1, G.kills / c.target);
+    const bw = Math.min(W * 0.46, 280), bx = (W - bw) / 2, p = Math.min(1, G.t / c.dur);
     ctx.fillStyle = '#05060a';
     roundRect(bx, y, bw, 10, 5); ctx.fill();
     ctx.fillStyle = c.boss ? '#ff5d73' : '#ffd166';
@@ -1392,7 +1640,7 @@ function drawHud() {
     ctx.textAlign = 'center';
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillStyle = '#c8cbd6';
-    ctx.fillText(c.boss ? 'Убей босса!' : `Убито ${Math.min(G.kills, c.target)} / ${c.target}`, W / 2, y + 16);
+    ctx.fillText(c.boss ? 'Убей босса!' : `До босса ${fmtTime(Math.max(0, c.dur - G.t))}`, W / 2, y + 16);
     y += 36;
   }
 
@@ -1428,7 +1676,7 @@ function drawHud() {
 
   // Иконки оружия и пассивок
   const items = [
-    ...Object.entries(G.weapons).map(([id, l]) => [WEAPONS[id], l]),
+    ...Object.entries(G.weapons).map(([id, u]) => [WEAPONS[id], 1 + Object.values(u).reduce((a, b) => a + b, 0)]),
     ...Object.entries(G.passives).map(([id, l]) => [PASSIVES[id], l]),
   ];
   const sz = 26;
@@ -1443,6 +1691,8 @@ function drawHud() {
     ctx.fillStyle = '#000'; ctx.fillText(l, x + sz + 1, y + sz + 3);
     ctx.fillStyle = '#fff'; ctx.fillText(l, x + sz, y + sz + 2);
   });
+
+  drawActiveButton();
 
   // Баннер с объявлением (босс, награда, окружение)
   const b = G.banners[0];
@@ -1469,6 +1719,66 @@ function drawHud() {
   }
 }
 
+// Таблица урона: цветная метка, название, число и полоска относительно лучшего
+function drawDmgTable(x, y, w, rows, fmt, rh = 22) {
+  const max = Math.max(1, ...rows.map(r => r.v));
+  rows.forEach((r, i) => {
+    const ry = y + i * rh, c = srcColor(r.src);
+    ctx.fillStyle = c; ctx.fillRect(x, ry + 4, 8, 8);
+    text(srcName(r.src), x + 14, ry + 8, 12, '#fff', 'left', true, w * 0.55);
+    text(fmt(r), x + w, ry + 8, 12, '#ffd166', 'right', true, w * 0.4);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(x, ry + 16, w, 3);
+    ctx.fillStyle = c; ctx.fillRect(x, ry + 16, w * r.v / max, 3);
+  });
+}
+
+// Окно урона в бою (под паузой): не останавливает игру. Вкладки «Всего» и «Урон/с» (за последние 10 с).
+// Свёрнуто — маленькая кнопка с графиком
+function drawDmgPanel(py) {
+  if (!S.dmgPanel) {
+    const b = { x: W - 12 - 36, y: py - 30, w: 36, h: 36, act: () => { S.dmgPanel = true; saveSettings(); } };
+    ctx.fillStyle = 'rgba(27,29,38,0.8)'; roundRect(b.x, b.y, b.w, b.h, 8); ctx.fill();
+    ctx.fillStyle = '#c8cbd6';
+    [10, 16, 7].forEach((hh, i) => ctx.fillRect(b.x + 9 + i * 7, b.y + 27 - hh, 5, hh));
+    ui.push(b);
+    return;
+  }
+  const rows = dmgRows(S.dmgTab), pw = 170, px = W - 12 - pw, ph = 34 + rows.length * 22 + 6;
+  ctx.fillStyle = 'rgba(12,13,18,0.72)';
+  roundRect(px, py, pw, ph, 10); ctx.fill();
+  [['total', 'Всего'], ['dps', 'Урон/с']].forEach(([id, name], i) => {
+    const b = { x: px + 6 + i * 64, y: py + 6, w: 60, h: 22 }, on = S.dmgTab === id;
+    ctx.fillStyle = on ? '#ffd166' : 'rgba(44,48,64,0.9)'; roundRect(b.x, b.y, b.w, b.h, 6); ctx.fill();
+    text(name, b.x + b.w / 2, b.y + 11, 11, on ? '#14141c' : '#c8cbd6', 'center');
+    ui.push({ ...b, act: () => { S.dmgTab = id; saveSettings(); } });
+  });
+  const x = { x: px + pw - 28, y: py + 6, w: 22, h: 22, act: () => { S.dmgPanel = false; saveSettings(); } };
+  text('✕', x.x + 11, x.y + 11, 13, '#9a9eae', 'center');
+  ui.push(x);
+  drawDmgTable(px + 10, py + 34, pw - 20, rows, r => fmtNum(r.v) + (S.dmgTab === 'dps' ? '/с' : ''));
+}
+
+// Кнопка активки героя (справа внизу): кольцо перезарядки, пока не готова
+function drawActiveButton() {
+  const a = G.active, ev = G.evo, R = 30, cx = W - 16 - R, cy = H - 16 - R - SAFE_B;
+  const color = WEAPONS[heroWeapon()].color, ready = a.cd <= 0 && a.t <= 0;
+  ctx.fillStyle = 'rgba(27,29,38,0.85)';
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#2c3040';
+  ctx.beginPath(); ctx.arc(cx, cy, R - 2, 0, TAU); ctx.stroke();
+  const k = a.t > 0 ? a.t / ev.dur : 1 - a.cd / ev.cd;
+  ctx.strokeStyle = a.t > 0 ? '#fff' : color;
+  ctx.beginPath(); ctx.arc(cx, cy, R - 2, -Math.PI / 2, -Math.PI / 2 + TAU * k); ctx.stroke();
+  ctx.globalAlpha = ready || a.t > 0 ? 1 : 0.45;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold 11px system-ui, sans-serif';
+  ctx.fillStyle = ready ? color : '#fff';
+  ctx.fillText(a.t > 0 ? a.t.toFixed(1) : a.cd > 0 ? Math.ceil(a.cd) : HEROES[SAVE.hero].active, cx, cy, R * 1.7);
+  ctx.globalAlpha = 1;
+  ui.push({ x: cx - R, y: cy - R, w: R * 2, h: R * 2, act: useActive });
+}
+
 function render() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = G.state === 'menu' ? '#0c0907' : arena().bg;
@@ -1481,7 +1791,7 @@ function render() {
     drawMenu();
   } else {
     drawHud();
-    if (G.state === 'levelup') drawLevelUp();
+    if (G.state === 'levelup' || G.state === 'weaponpick') drawLevelUp();
     else if (G.state === 'pause') drawPause();
     else if (G.state === 'over') drawResult();
   }

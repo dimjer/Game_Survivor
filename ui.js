@@ -47,8 +47,6 @@ function startCampaign(n, d = 0) {
   if (!diffOpen(n, d)) d = 0;
   newGame('play', 'camp', n, d);
   G.intro = 1;
-  const sub = (d ? DIFFS[d].name + '   ' : '') + G.traits.map(t => traitView(t, n)).map(v => v.icon + ' ' + v.name).join('   ');
-  addBanner(`ГЛАВА ${n} — ${levelName(n).toUpperCase()}`, sub, d ? DIFFS[d].color : locOf(n).color);
 }
 function startEndless() { newGame('play', 'endless'); G.intro = 1; }
 

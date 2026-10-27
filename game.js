@@ -87,7 +87,7 @@ function newGame(state = 'play', mode = 'endless', level = 0, diff = 0) {
       x: 0, y: 0, r: 9, hp: 100, maxHp: 100, speed: 115, face: 1, inv: 0, walk: 0,
       level: 1, xp: 0, xpNext: 5, magnet: 55, regen: 0, dmgMul: 1, cdMul: 1,
     },
-    enemies: [], bullets: [], ebullets: [], gems: [], texts: [], particles: [], banners: [],
+    enemies: [], bullets: [], ebullets: [], gems: [], texts: [], particles: [],
     weapons: { [heroWeapon()]: newUps(heroWeapon()) }, passives: {}, timers: {}, orbAng: 0,
     heroBonus: heroBonuses(), evo: curEvo(),
     active: { t: 0, cd: 5 },        // активка героя: t — сколько ещё действует, cd — до готовности
@@ -285,7 +285,6 @@ function spawnElite() {
   e.elite = true;
   e.hp = e.maxHp = e.hp * ECON.eliteHp;
   e.r *= ECON.eliteSize; e.xp *= 5; e.speed *= 0.85;
-  addBanner('ПРОМЕЖУТОЧНЫЙ МОБ', 'Убей — получишь новое оружие', '#7df9ff');
 }
 
 // Стая бегунов с одной стороны (особенность «Стаи»)
@@ -295,22 +294,19 @@ function spawnPack() {
   for (let k = lo; k <= lo + 2; k++) if (MOBS[k - 1].arch === 'runner') tier = k;
   const a = rand(0, TAU);
   for (let i = 0; i < ECON.packSize; i++) spawnMob(tier, a + rand(-0.3, 0.3), spawnRadius() + rand(0, 40));
-  addBanner('СТАЯ!', '', '#ffd166');
 }
 
 // Кольцо врагов — герой окружён со всех сторон
 function spawnRing(tier, n) {
   for (let i = 0; i < n; i++) spawnMob(tier, (i / n) * TAU, spawnRadius() - 10);
-  addBanner('ОКРУЖЕНИЕ!', '', '#ff5d73');
 }
 
 // e.boss — поведение босса (golem / lich / hybrid), имя и цвет — из BOSSES
 function spawnBoss(kind, hpMul, dmgMul) {
   const B = BOSSES[kind], h = G.hero, a = rand(0, TAU), R = spawnRadius() - 20;
-  addBanner('БОСС: ' + B.name.toUpperCase(), '', '#ffffff');
   return pushEnemy({
     boss: B.ai, name: B.name, r: B.r, hp: B.hp * hpMul, speed: B.speed, dmg: Math.round(B.dmg * dmgMul),
-    color: B.color, shape: B.ai, xp: B.xp, armor: has('a') ? ECON.armor : 0,
+    color: B.color, shape: B.ai, xp: B.xp, armor: has('a') ? ECON.armor : 0, shield: has('z'),
     ai: { t: 2.5, phase: 'walk', dx: 0, dy: 0, summon: 6, ring: 3 },
   }, h.x + Math.cos(a) * R, h.y + Math.sin(a) * R);
 }
@@ -343,7 +339,6 @@ function updateEndlessSpawns(dt) {
   if (!G.hatch && t >= ECON.hatchAt) {
     const a = rand(0, TAU);
     G.hatch = { x: h.x + Math.cos(a) * 260, y: h.y + Math.sin(a) * 260 };
-    addBanner('ПОДВАЛ ОТКРЫТ', 'Добеги до люка, чтобы забрать всё золото', '#ffd166');
   }
 }
 
@@ -400,17 +395,16 @@ function updateCampaign() {
     if (canGetWeapon()) spawnElite();
   }
   const D = DIFFS[G.diff], more = r => ({ ...r, gold: Math.round(r.gold * D.gold) });
-  if (c.got < 1 && p >= 0.25) { c.got = 1; campReward(more(ECON.reward25(n)), '25% · МИНИ-НАГРАДА'); }
-  if (c.got < 2 && p >= 0.5) { c.got = 2; campReward(more(ECON.reward50(n)), '50% · СРЕДНЯЯ НАГРАДА'); }
+  if (c.got < 1 && p >= 0.25) { c.got = 1; campReward(more(ECON.reward25(n))); }
+  if (c.got < 2 && p >= 0.5) { c.got = 2; campReward(more(ECON.reward50(n))); }
   if (!c.boss && p >= 1) c.boss = spawnBoss(levelBoss(n), ECON.bossHp(n) * D.hp, ECON.levelDmg(n) * D.dmg);
 }
 
 // Вехи начисляются сразу: даже если герой погибнет, награда останется
-function campReward(r, title) {
+function campReward(r) {
   grant(r);
   G.camp.earned.gold += r.gold;
   G.camp.earned.shards += r.shards;
-  addBanner(title, costText(r), '#ffd166');
 }
 
 // Босс уровня убит: остальные враги рассыпаются, через секунду — экран победы
@@ -419,7 +413,6 @@ function winLevel() {
   c.won = G.t;
   for (const e of G.enemies) if (!e.dead) { e.dead = true; burst(e.x, e.y, e.color, 3); }
   G.ebullets.length = 0;
-  addBanner('ГЛАВА ПРОЙДЕНА!', '', '#57e389');
 }
 
 // Конец забега: начисляем награды и показываем итог.
@@ -475,11 +468,6 @@ function finishRun(outcome) {
 function addText(x, y, s, color = '#fff', life = 0.6, size = 9) {
   if (G.texts.length > 140) G.texts.shift();
   G.texts.push({ x: x + rand(-4, 4), y, s, color, life, max: life, size });
-}
-
-// Крупная надпись по центру экрана; показываются по очереди
-function addBanner(text, sub, color) {
-  if (G.banners.length < 4) G.banners.push({ text, sub, color, life: 2.4 });
 }
 
 function burst(x, y, color, n) {
@@ -590,7 +578,6 @@ function useActive() {
   a.cd = ev.cd;
   questAdd('actives');
   if (SAVE.hero === 'eliana') h.hp = Math.min(h.maxHp, h.hp + h.maxHp * 0.15);
-  addBanner(HEROES[SAVE.hero].active.toUpperCase() + '!', '', WEAPONS[heroWeapon()].color);
 }
 
 function updateWeapons(dt) {
@@ -693,6 +680,8 @@ function updateBullets(dt) {
       if (e.dead || b.hit.has(e)) continue;
       if ((e.x - b.x) ** 2 + (e.y - b.y) ** 2 < (e.r + b.r) ** 2) {
         b.hit.add(e);
+        // Щит босса гасит первый удар снаряда: без пробития урона нет, Нова не проходит вовсе
+        if (e.shield && (b.src === 'nova' || --b.pierce <= 0)) { b.dead = true; burst(b.x, b.y, '#7df9ff', 3); break; }
         const sp = Math.hypot(b.vx, b.vy);
         hurt(e, b.dmg, b.vx / sp * 90, b.vy / sp * 90, b.src);
         if (--b.pierce <= 0) { b.dead = true; break; }
@@ -824,7 +813,6 @@ function damageHero(dmg) {
       const ex = e.x - h.x, ey = e.y - h.y, d = Math.hypot(ex, ey) || 1;
       if (d < 180) { e.kx += ex / d * 700; e.ky += ey / d * 700; }
     }
-    addBanner('ВТОРОЙ ШАНС', '', '#80ffdb');
     return;
   }
   h.hp = 0;
@@ -912,7 +900,11 @@ function rollChoices() {
     const l = G.passives[id] || 0;
     if (l < PASSIVES[id].max) stats.push({ kind: 'p', id, lvl: l + 1 });
   }
-  const res = shuffle(ups).slice(0, 3).concat(shuffle(stats).slice(0, 1));
+  shuffle(ups);
+  // Глава со щитом босса: Пробитие Жезла (пока не взято до конца) всегда в выборе
+  const pi = has('z') ? ups.findIndex(c => c.id === 'wand' && c.up === 'pierce') : -1;
+  if (pi > 0) ups.unshift(ups.splice(pi, 1)[0]);
+  const res = ups.slice(0, 3).concat(shuffle(stats).slice(0, 1));
   if (!res.length) res.push({ kind: 'f', id: 'food' });
   return res;
 }
@@ -983,7 +975,6 @@ function update(dt) {
   if (G.state !== 'play') return;
 
   G.t += dt;
-  if (G.banners.length && (G.banners[0].life -= dt) <= 0) G.banners.shift();
   const c = G.camp;
   if (c && c.won != null) {
     if (G.t - c.won > 1.2) { finishRun('win'); return; }
@@ -1148,8 +1139,15 @@ function armorRing(e) {
   ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 3, 0, TAU); ctx.stroke();
 }
 
+// Голубой пузырь щита вокруг босса
+function shieldBubble(e) {
+  ctx.fillStyle = 'rgba(125,249,255,0.12)';
+  ctx.strokeStyle = 'rgba(125,249,255,' + (0.55 + 0.25 * Math.sin(G.t * 4)) + ')'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 9, 0, TAU); ctx.fill(); ctx.stroke();
+}
+
 function drawEnemy(e) {
-  if (e.boss) { drawBoss(e); return; }
+  if (e.boss) { drawBoss(e); if (e.shield) shieldBubble(e); return; }
   ctx.fillStyle = e.flash > 0 ? '#ffffff' : e.color;
   const r = e.r;
   if (e.shape === 'sq') {
@@ -1706,21 +1704,6 @@ function drawHud() {
   });
 
   drawActiveButton();
-
-  // Баннер с объявлением (босс, награда, окружение)
-  const b = G.banners[0];
-  if (b) {
-    ctx.globalAlpha = clamp(b.life * 2, 0, 1) * clamp((2.4 - b.life) * 4, 0, 1);
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = 'bold 22px system-ui, sans-serif';
-    ctx.fillStyle = '#000'; ctx.fillText(b.text, W / 2 + 1, H * 0.3 + 1);
-    ctx.fillStyle = b.color; ctx.fillText(b.text, W / 2, H * 0.3);
-    if (b.sub) {
-      ctx.font = 'bold 15px system-ui, sans-serif';
-      ctx.fillStyle = '#fff'; ctx.fillText(b.sub, W / 2, H * 0.3 + 26);
-    }
-    ctx.globalAlpha = 1;
-  }
 
   if (joy) {
     ctx.strokeStyle = 'rgba(255,255,255,0.25)';

@@ -58,6 +58,7 @@ const MOBS = [
 const BOSSES = {
   wolfLeader:  { name: 'Вожак стаи',             ai: 'golem',  r: 26, hp: 700, speed: 42, dmg: 25, color: '#9aa3ad', xp: 40 },
   goblinShaman:{ name: 'Шаман гоблинов',         ai: 'lich',   r: 22, hp: 560, speed: 34, dmg: 18, color: '#5fb84a', xp: 40 },
+  barkWarden:  { name: 'Кора-Хранитель',         ai: 'golem',  r: 28, hp: 700, speed: 36, dmg: 25, color: '#8a6a3a', xp: 40 },
   rootGuard:   { name: 'Корень-Страж',           ai: 'hybrid', r: 32, hp: 700, speed: 34, dmg: 25, color: '#6b8f3a', xp: 60 },
   rotBoar:     { name: 'Гнилой вепрь',           ai: 'golem',  r: 26, hp: 700, speed: 40, dmg: 25, color: '#a39060', xp: 40 },
   sporeLord:   { name: 'Споровик',               ai: 'lich',   r: 22, hp: 560, speed: 34, dmg: 18, color: '#9acd32', xp: 40 },
@@ -188,6 +189,7 @@ const TRAITS = {
   a: { name: 'Броня',   icon: '🛡', color: '#b8c0cc', info: 'Мобы и босс режут 30% урона' },
   s: { name: 'Стаи',    icon: '🐺', color: '#ffd166', info: 'Мобов больше, они слабее и налетают стаями' },
   r: { name: 'Стрелки', icon: '🏹', color: '#4cc9f0', info: 'Часть мобов стреляет издалека' },
+  z: { name: 'Щит босса', icon: '🔰', color: '#7df9ff', info: 'Щит гасит снаряды без пробития и Нову. Бери Жезл с Пробитием, Ауру или Клинки' },
 };
 const HAZARDS = {
   poison: { name: 'Яд',      icon: '☠', color: '#57e389', rgb: '87,227,137' },
@@ -286,7 +288,9 @@ const UNLOCKS = { boost: 10, pet: 40 };
 const levelArena = n => locOf(n).id;
 const levelName = n => LEVELS[n - 1][0];
 const levelLore = n => LEVELS[n - 1][2];
-const levelBoss = n => { const L = locOf(n); return L.bosses[n === L.to ? 2 : n % 2]; };
+// Особые боссы отдельных глав; остальные главы берут боссов локации
+const LEVEL_BOSS = { 3: 'barkWarden' };
+const levelBoss = n => { const L = locOf(n); return LEVEL_BOSS[n] || L.bosses[n === L.to ? 2 : n % 2]; };
 
 // ------------------------------------------------------------
 //  Предметы убежища

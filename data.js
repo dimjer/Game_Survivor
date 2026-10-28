@@ -98,40 +98,41 @@ const PUZZLES_PER_LEVEL = 10; // 10 пазлов оружия = +1 уровен�
 // у каждого оружия свои (ups: сколько раз можно взять и что даёт). stats(u) собирает
 // итоговые характеристики из взятых улучшений u = { id улучшения: сколько раз }.
 const WEAPONS = {
+  // Внутренние id (wand, aura) остались от первых версий — на них завязаны сохранения
   wand: {
-    name: 'Жезл', color: '#ffd166', tier: 'green', info: 'Стреляет в ближайшего врага',
+    name: 'Лук', color: '#e0a860', tier: 'green', info: 'Стреляет стрелами в ближайшего врага',
     ups: {
       dmg:    { max: 5, name: 'Урон',        info: '+30% урона' },
       rate:   { max: 5, name: 'Перезарядка', info: '−12% перезарядки' },
-      count:  { max: 3, name: 'Снаряд',      info: '+1 снаряд в залпе' },
-      pierce: { max: 2, name: 'Пробитие',    info: 'Снаряд пробивает ещё 1 врага' },
+      count:  { max: 3, name: 'Стрела',      info: '+1 стрела в залпе' },
+      pierce: { max: 2, name: 'Пробитие',    info: 'Стрела пробивает ещё 1 врага' },
       volley: { max: 3, name: 'Залп',        info: '+20% шанс второго залпа' },
     },
     stats: u => ({ dmg: 10 * (1 + 0.3 * u.dmg), cd: 0.8 * 0.88 ** u.rate, count: 1 + u.count, pierce: 1 + u.pierce, volley: 0.2 * u.volley }),
   },
   orbit: {
-    name: 'Клинки', color: '#7df9ff', tier: 'green', info: 'Клинки кружат вокруг героя',
+    name: 'Сюрикены', color: '#c9d3e0', tier: 'purple', info: 'Сюрикены кружат вокруг героя',
     ups: {
-      count:  { max: 4, name: 'Клинок',       info: '+1 клинок' },
+      count:  { max: 4, name: 'Сюрикен',      info: '+1 сюрикен' },
       dmg:    { max: 5, name: 'Урон',         info: '+30% урона' },
-      radius: { max: 3, name: 'Размах',       info: 'Клинки летают дальше от героя' },
+      radius: { max: 3, name: 'Размах',       info: 'Сюрикены летают дальше от героя' },
       spin:   { max: 3, name: 'Вращение',     info: '+15% к скорости вращения' },
       push:   { max: 3, name: 'Отбрасывание', info: '+50% к отбрасыванию' },
     },
     stats: u => ({ count: 2 + u.count, dmg: 11 * (1 + 0.3 * u.dmg), radius: 53 + 10 * u.radius, spin: 2.8 * (1 + 0.15 * u.spin), push: 140 * (1 + 0.5 * u.push) }),
   },
   aura: {
-    name: 'Аура', color: '#ff8a4c', tier: 'green', info: 'Жжёт всех врагов рядом',
+    name: 'Меч', color: '#c8d0dc', tier: 'green', info: 'Рубит дугой всех врагов перед героем',
     ups: {
-      radius: { max: 5, name: 'Радиус',     info: '+12 к радиусу' },
-      dmg:    { max: 5, name: 'Урон',       info: '+30% урона' },
-      tick:   { max: 3, name: 'Жар',        info: 'Жжёт на 15% чаще' },
-      slow:   { max: 3, name: 'Вязкость',   info: 'Враги в ауре медленнее на 10%' },
+      radius: { max: 5, name: 'Длинный клинок', info: '+12 к длине удара' },
+      dmg:    { max: 5, name: 'Урон',           info: '+30% урона' },
+      rate:   { max: 4, name: 'Быстрый взмах',  info: '−12% перезарядки' },
+      arc:    { max: 3, name: 'Широкий взмах',  info: 'Дуга удара шире на 30°' },
     },
-    stats: u => ({ radius: 52 + 12 * u.radius, dmg: 5 * (1 + 0.3 * u.dmg), tick: 0.5 * 0.85 ** u.tick, slow: 0.1 * u.slow }),
+    stats: u => ({ radius: 62 + 12 * u.radius, dmg: 14 * (1 + 0.3 * u.dmg), cd: 0.6 * 0.88 ** u.rate, arc: 2.1 + 0.52 * u.arc, push: 90 }),
   },
   nova: {
-    name: 'Нова', color: '#c77dff', tier: 'green', info: 'Залп снарядов во все стороны',
+    name: 'Нова', color: '#c77dff', tier: 'blue', info: 'Залп снарядов во все стороны',
     ups: {
       count:  { max: 4, name: 'Снаряды',     info: '+3 снаряда в кольце' },
       dmg:    { max: 5, name: 'Урон',        info: '+30% урона' },
@@ -139,6 +140,16 @@ const WEAPONS = {
       volley: { max: 3, name: 'Залп',        info: '+20% шанс второго кольца' },
     },
     stats: u => ({ count: 10 + 3 * u.count, dmg: 11 * (1 + 0.3 * u.dmg), cd: 2.9 * 0.88 ** u.rate, volley: 0.2 * u.volley }),
+  },
+  stench: {
+    name: 'Аура', color: '#a8c256', tier: 'blue', info: 'Вонючее облако жжёт всех врагов рядом',
+    ups: {
+      radius: { max: 5, name: 'Радиус',   info: '+12 к радиусу' },
+      dmg:    { max: 5, name: 'Урон',     info: '+30% урона' },
+      tick:   { max: 3, name: 'Жар',      info: 'Жжёт на 15% чаще' },
+      slow:   { max: 3, name: 'Вязкость', info: 'Враги в ауре медленнее на 10%' },
+    },
+    stats: u => ({ radius: 52 + 12 * u.radius, dmg: 5 * (1 + 0.3 * u.dmg), tick: 0.5 * 0.85 ** u.tick, slow: 0.1 * u.slow }),
   },
 };
 const MAX_RUN_WEAPONS = 8; // сколько оружия можно собрать за бой
@@ -189,7 +200,7 @@ const TRAITS = {
   a: { name: 'Броня',   icon: '🛡', color: '#b8c0cc', info: 'Мобы и босс режут 30% урона' },
   s: { name: 'Стаи',    icon: '🐺', color: '#ffd166', info: 'Мобов больше, они слабее и налетают стаями' },
   r: { name: 'Стрелки', icon: '🏹', color: '#4cc9f0', info: 'Часть мобов стреляет издалека' },
-  z: { name: 'Щит босса', icon: '🔰', color: '#7df9ff', info: 'Щит гасит снаряды без пробития и Нову. Бери Жезл с Пробитием, Ауру или Клинки' },
+  z: { name: 'Щит босса', icon: '🔰', color: '#7df9ff', info: 'Щит гасит снаряды без пробития и Нову. Бери Лук с Пробитием, Меч или Сюрикены' },
 };
 const HAZARDS = {
   poison: { name: 'Яд',      icon: '☠', color: '#57e389', rgb: '87,227,137' },
@@ -254,8 +265,7 @@ const ECON = {
   reward100: (n, first) => first
     ? { gold: Math.round((70 + 45 * n) * rewardScale(n)), shards: 1 + Math.floor(n / 3) }
     : { gold: Math.round((70 + 45 * n) / 2 * rewardScale(n)), shards: 1 },
-  firstClearMedal: { 10: 'fury' },             // гарантированный редкий медальон за первое прохождение
-  replayMedalChance: 0.3,                      // шанс редкого медальона в кейсе за повтор
+  firstClearKeys: { 10: 1 },                   // синие ключи за первое прохождение главы (там открываются бусты)
 
   // Мета-прокачка оружия: уровни 1–50, каждые 5 уровней — новый ранг за осколки
   weaponMax: 50,
@@ -321,15 +331,22 @@ const ACCOUNT_REWARDS = {
 // стартовое оружие и активку. Пассивки всех открытых героев работают всегда: +% к их оружию.
 // Открываются за звёзды ⭐ (их дают недельные задания).
 const RARITY = [{ name: 'Базовый', color: '#c8cbd6' }, { name: 'Редкий', color: '#4cc9f0' }, { name: 'Эпический', color: '#c77dff' }, { name: 'Легендарный', color: '#ff9f1c' }];
+// Редкость героя = редкость его оружия; у каждого из 5 оружий свой герой
 const HEROES = {
-  orin:   { name: 'Орин',   title: 'ученик-стихийник', race: 'Маги',   rarity: 0, weapon: 'wand',  stars: 0,
-    pal: { 1: '#f2c9a0', 3: '#3e8ef7' }, active: 'Шквал',        activeInfo: 'жезл стреляет вдвое чаще' },
-  faeron: { name: 'Фаэрон', title: 'клинок-танцор',    race: 'Эльфы',  rarity: 1, weapon: 'orbit', stars: 1000,
-    pal: { 1: '#e0b48a', 3: '#3fae5a' }, active: 'Танец клинков', activeInfo: 'клинки рубят сильнее' },
-  grax:   { name: 'Гракс',  title: 'бес-поджигатель',  race: 'Демоны', rarity: 0, weapon: 'aura',  stars: 1000,
-    pal: { 1: '#9ab070', 3: '#6b5a2a' }, active: 'Вонь',          activeInfo: 'аура в 1.5 раза шире' },
-  eliana: { name: 'Элиана', title: 'страж света',      race: 'Ангелы', rarity: 0, weapon: 'nova',  stars: 1000,
+  orin:   { name: 'Орин',   title: 'юный лучник',      race: 'Люди',   rarity: 0, weapon: 'wand',  stars: 0,
+    pal: { 1: '#f2c9a0', 3: '#3e8ef7' }, active: 'Град стрел',   activeInfo: 'лук стреляет вдвое чаще' },
+  // id faeron остался от эльфа-клинка — на нём держатся сохранения
+  faeron: { name: 'Кайто',  title: 'ниндзя',           race: 'Люди',   rarity: 2, weapon: 'orbit', stars: 1000,
+    pal: { 1: '#e0b48a', 3: '#2b2d3a', 9: '#c0303a' }, active: 'Вихрь сюрикенов', activeInfo: 'сюрикенов больше, режут сильнее',
+    body: ['..0000..', '.099990.', '.012120.', '.033330.', '..0330..', '.033330.', '01333310', '..3333..'] },
+  grax:   { name: 'Гракс',  title: 'орк-рубака',       race: 'Орки',   rarity: 0, weapon: 'aura',  stars: 1000,
+    pal: { 1: '#9ab070', 3: '#8a96a8' }, active: 'Вихрь',         activeInfo: 'меч рубит по кругу и на треть дальше' },
+  eliana: { name: 'Элиана', title: 'страж света',      race: 'Ангелы', rarity: 1, weapon: 'nova',  stars: 1000,
     pal: { 1: '#f8e0c8', 3: '#e8e4ff' }, active: 'Сияние',        activeInfo: 'нова бьёт втрое чаще, лечит 15% HP' },
+  // Болотный тролль: зелёная кожа, клыки (7), лохмотья
+  burp:   { name: 'Бурп',   title: 'болотный тролль',  race: 'Тролли', rarity: 1, weapon: 'stench', stars: 1000,
+    pal: { 1: '#7fa05a', 3: '#5a4a32' }, active: 'Зловоние',     activeInfo: 'аура вдвое шире и жжёт вдвое чаще',
+    body: ['..0000..', '.011110.', '.012120.', '.071170.', '..0330..', '.033330.', '01333310', '..3333..'] },
 };
 
 // ------------------------------------------------------------
@@ -371,9 +388,12 @@ const CHESTS = {
   blue:   { name: 'Синий сундук',          color: '#4cc9f0', reward: { gold: 200, puzzles: { blue: 5 } } },
   purple: { name: 'Фиолетовый сундук',     color: '#c77dff', reward: { gold: 300, puzzles: { purple: 5 } } },
   weapon: { name: 'Сундук оружия',         color: '#c77dff', info: 'Золото и 10 пазлов: зелёные 60%, синие 30%, фиолетовые 10%' },
-  boost:  { name: 'Кейс бустов',           color: '#4cc9f0', info: 'Новый редкий медальон или +1 уровень медальона/тотема', key: 'blue' },
-  red:    { name: 'Особый красный сундук', color: '#ff5d73', info: '5 жёлтых и 3 красных пазла, 50 ⭐', key: 'red', reward: { stars: 50, puzzles: { yellow: 5, red: 3 } } },
+  boost:  { name: 'Кейс бустов',           color: '#4cc9f0', info: '1 пазл случайного буста', key: 'blue' },
+  red:    { name: 'Особый красный сундук', color: '#ff5d73', info: '1 запчасть: фиолет. 80% · жёлт. 15% · красн. 5%', key: 'red' },
 };
+const RED_CHEST_TIERS = [['purple', 0.8], ['yellow', 0.15], ['red', 0.05]];
+const KEY_ADS = 1;      // ключ каждого цвета: 1 в день бесплатно + KEY_ADS за рекламу
+const GEM_EVERY = 100;  // каждые 100 открытий кейса — гем: +1 уровень бусту (синий) или красному оружию (красный)
 const WEAPON_CHEST_TIERS = [['green', 0.6], ['blue', 0.3], ['purple', 0.1]]; // выше фиолетового не падает
 
 const SHOP = {
@@ -395,12 +415,21 @@ const SHOP = {
     { stars: 100, usd: 0.99 }, { stars: 550, usd: 4.99 }, { stars: 1200, usd: 9.99 },
     { stars: 2500, usd: 19.99 }, { stars: 6500, usd: 49.99 },
   ],
+  // Подписки можно держать одновременно: скорость, «Новый набор», золото и воскрешение — по лучшей,
+  // билеты, рейды и награды дня — складываются. days: 0 — навсегда
   subs: [
-    { name: 'Бронза',  eur: 4.99,  tickets: 5 },
-    { name: 'Серебро', eur: 14.99, tickets: 10 },
-    { name: 'Золото',  eur: 49.99, tickets: 20 },
+    { name: 'Бронза',  eur: 4.99,  days: 30, color: '#c99a6a', tickets: 5,  speed: 1.5, rerolls: 1, raids: 1,
+      now: { stars: 300 }, daily: { stars: 50, keys: { blue: 1 } } },
+    { name: 'Серебро', eur: 14.99, days: 30, color: '#c8cbd6', tickets: 10, speed: 2,   rerolls: 2, raids: 2,
+      now: { stars: 1000 }, daily: { stars: 100, keys: { blue: 1, red: 1 } } },
+    { name: 'Золото',  eur: 49.99, days: 0,  color: '#ffd166', tickets: 20, speed: 2,   rerolls: 2, raids: 3, goldMul: 1.3, revive: true,
+      now: { stars: 3000, keys: { blue: 5, red: 3 } }, daily: { stars: 150, keys: { blue: 2, red: 1 } } },
   ],
-  subDays: 30,
+  // «Неделя подписчика»: награда за каждый день с подпиской, по кругу из 7. С двумя подписками и больше — вдвое
+  subWeek: [
+    { stars: 200 }, { keys: { blue: 2 } }, { gold: 1000 }, { keys: { red: 1 } },
+    { stars: 300 }, { keys: { blue: 2, red: 1 } }, { gems: 1 },
+  ],
   // Сундук главы: платное предложение за каждые 5 пройденных уровней кампании
   chapterEvery: 5,
   chapterOffer: k => ({ usd: 4.99, stars: 100 + 20 * k, gold: 2000, keys: { blue: 2, red: 1 } }),
@@ -433,16 +462,17 @@ function heroEvo(lvl) {
   return v;
 }
 
-// Медальоны и тотемы — пассивные бусты. Обычные покупаются за золото,
-// редкие выпадают только из кейсов кампании, а прокачиваются за золото и осколки.
+// Медальоны и тотемы — пассивные бусты. Не покупаются: только пазлы из синего кейса (синий ключ).
+// Открыть буст — 1 пазл, каждый следующий уровень дороже (BOOST_PUZZLES)
 const MEDALS = {
-  hpTotem:    { name: 'Тотем здоровья',    rare: false, color: '#ff5d73', max: 10, info: '+5 к макс. HP',                 cost: l => ({ gold: Math.round(50 * 1.4 ** l / 5) * 5 }) },
-  dmgTotem:   { name: 'Тотем силы',        rare: false, color: '#ff9f1c', max: 5,  info: '+1 к урону всего оружия',       cost: l => ({ gold: 150 * 2 ** l }) },
-  fury:       { name: 'Медальон ярости',   rare: true,  color: '#ff5d3a', max: 3,  info: '+15% урона всем оружием',       cost: l => ({ gold: 400 * l, shards: 6 * l }) },
-  wandDouble: { name: 'Двойной залп: Жезл', rare: true, color: '#ffd166', max: 4,  info: '+25% шанс повторного залпа',    cost: l => ({ gold: 300 * l, shards: 4 * l }) },
-  novaDouble: { name: 'Двойной залп: Нова', rare: true, color: '#c77dff', max: 4,  info: '+25% шанс второго кольца',      cost: l => ({ gold: 300 * l, shards: 4 * l }) },
-  bladeExtra: { name: 'Вихрь клинков',     rare: true,  color: '#7df9ff', max: 2,  info: '+1 клинок',                     cost: () => ({ gold: 600, shards: 10 }) },
+  hpTotem:    { name: 'Тотем здоровья',    rare: false, color: '#ff5d73', max: 10, info: '+5 к макс. HP' },
+  dmgTotem:   { name: 'Тотем силы',        rare: false, color: '#ff9f1c', max: 5,  info: '+1 к урону всего оружия' },
+  fury:       { name: 'Медальон ярости',   rare: true,  color: '#ff5d3a', max: 3,  info: '+15% урона всем оружием' },
+  wandDouble: { name: 'Двойная тетива',   rare: true,  color: '#e0a860', max: 4,  info: 'Лук: +25% шанс второго залпа' },
+  novaDouble: { name: 'Двойной залп: Нова', rare: true, color: '#c77dff', max: 4,  info: '+25% шанс второго кольца' },
+  bladeExtra: { name: 'Лишний сюрикен',    rare: true,  color: '#7df9ff', max: 2,  info: '+1 сюрикен' },
 };
+const BOOST_PUZZLES = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]; // пазлов на уровень буста 1, 2, 3…
 
 // Головные уборы: пиксели над головой героя (цвета — 5..8 в HERO_PAL)
 const OUTFITS = {
@@ -451,6 +481,11 @@ const OUTFITS = {
   hood:  { name: 'Капюшон',   price: 250,  rows: ['..6666..', '.666666.'] },
   horns: { name: 'Рога',      price: 500,  rows: ['7......7', '.7....7.'] },
   crown: { name: 'Корона',    price: 3000, rows: ['.8.88.8.', '.888888.'] },
+  // Комбинезон-котик: белый с розовым, капюшон с ушками, розовые лапки (pal перекрашивает одежду героя).
+  // С ним рядом бегает кот Жора и царапает тех, кто бьёт героя (только визуал)
+  // head — капюшон вместо 4 верхних строк героя: обнимает лицо по бокам, как ушанка
+  catEars: { name: 'Комбинезон-котик', price: 300, cat: true, info: 'С тобой бегает кот Жора', rows: ['.b....b.', 'bab..bab'],
+    head: ['.bbbbbb.', 'bb1111bb', 'bb1212bb', 'bb1111bb'], pal: { 3: '#fbf7f4', 4: '#f7a8c8' } },
 };
 
 const PETS = {

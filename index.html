@@ -16,6 +16,11 @@
     body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
     /* Холст на весь экран, включая зону под часами и полоской «домой» (на iPhone с экрана «Домой») */
     canvas { display: block; position: fixed; left: 0; top: 0; width: 100%; height: 100%; }
+    /* Пиксельный шрифт заголовков и кнопок (Pixelify Sans, лицензия OFL): кириллица с украинскими буквами + латиница */
+    @font-face { font-family: 'Pixelify Sans'; font-weight: 400 700; font-display: swap; src: url(fonts/pixelify-cyrillic.woff2) format('woff2');
+      unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+    @font-face { font-family: 'Pixelify Sans'; font-weight: 400 700; font-display: swap; src: url(fonts/pixelify-latin.woff2) format('woff2');
+      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2212; }
   </style>
 </head>
 <body>
@@ -31,10 +36,14 @@
       document.body.appendChild(d);
     });
   </script>
+  <script src="i18n.js"></script>
+  <script src="lang/en.js"></script>
+  <script src="lang/uk.js"></script>
   <script src="data.js"></script>
   <script src="levels.js"></script>
   <script src="meta.js"></script>
   <script src="game.js"></script>
+  <script src="skin.js"></script>
   <script src="ui.js"></script>
 </body>
 </html>

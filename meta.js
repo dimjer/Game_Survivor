@@ -8,7 +8,7 @@
 // Настройки (отдельно от прогресса, чтобы сброс прогресса их не трогал)
 const SETTINGS_KEY = 'survivor.settings';
 // music и sfx — заготовка: звука в игре пока нет. dmgPanel — окно урона в бою, dmgTab — его вкладка
-const S = { shake: true, dmgText: true, vibrate: true, music: true, sfx: true, dmgPanel: true, dmgTab: 'total' };
+const S = { shake: true, dmgText: true, vibrate: true, music: true, sfx: true, dmgPanel: false, dmgTab: 'total', speed: 1 };
 try { Object.assign(S, JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}); } catch {}
 function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(S)); } catch {} }
 
@@ -17,17 +17,22 @@ function defaultSave() {
   return {
     gold: 0, shards: 0, stars: 0,
     puzzles: {},        // пазлы оружия: id → шт (каждые 10 сразу дают +1 уровень)
-    tierPuzzles: {},    // пазлы тиров, на которые ещё нет оружия: тир → шт
+    tierPuzzles: {},    // пазлы-джокеры цвета (тира): вкладываются в любое оружие этого цвета; тир → шт
+    jokerGems: {},      // гемы-джокеры цвета: +1 уровень любому оружию этого цвета; тир → шт
     week: null,         // недельные задания: { id, stats, quests: [забрано], chests: [забрано] }
     tickets: 0,         // билеты: пропуск рекламы (дают подписки)
     keys: { blue: 0, red: 0 },
-    sub: null,          // подписка: { tier, until }
+    boostPuzzles: {},   // пазлы бустов: id → шт
+    chestOpens: { boost: 0, red: 0 }, // открыто кейсов за ключи (каждые GEM_EVERY — гем)
+    gems: { boost: 0, red: 0 },       // гемы за открытия: ждут выбора
+    subs: {},           // подписки: номер → до какого времени (мс) или 'forever'
+    subWeek: 0,         // сколько дней «Недели подписчика» забрано в текущем круге
     day: null,          // дневные лимиты магазина: { id, n: { покупка: сколько раз } }
     chapterBought: [],  // купленные сундуки глав (номер k: за уровни 5k)
     unlocked: 1,        // максимальный открытый уровень кампании
     cleared: {},        // уровень → сколько раз пройден
     weapons: {},        // id → мета-уровень (по умолчанию 1)
-    loadout: ['orbit', 'aura', 'nova'], // оружие, которое может выпасть в бою (кроме оружия героя)
+    loadout: ['orbit', 'aura', 'nova', 'stench'], // оружие, которое может выпасть в бою (кроме оружия героя)
     acct: 1,            // уровень аккаунта
     pips: { dmg: 0, crit: 0, hp: 0, cd: 0 }, // шаги прокачки характеристик на текущем уровне аккаунта
     hero: 'orin',
@@ -45,6 +50,7 @@ try {
   if (s) SAVE = Object.assign(defaultSave(), s);
 } catch {}
 if (!HEROES[SAVE.hero]) SAVE.hero = 'orin';
+if (SAVE.sub) { SAVE.subs[SAVE.sub.tier] = SAVE.sub.until; delete SAVE.sub; } // старое сохранение: одна подписка
 function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(SAVE)); } catch {} }
 
 // ------------------------------------------------------------
@@ -54,11 +60,11 @@ function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(SAVE)); } 
 const canAfford = c => SAVE.gold >= (c.gold || 0) && SAVE.shards >= (c.shards || 0);
 function pay(c) { SAVE.gold -= c.gold || 0; SAVE.shards -= c.shards || 0; }
 
-// Начислить награду { gold, shards, medal } и сохранить
+// Начислить награду { gold, shards, keys } и сохранить
 function grant(r) {
   SAVE.gold += Math.floor(r.gold || 0);
   SAVE.shards += r.shards || 0;
-  if (r.medal) SAVE.medals[r.medal] = Math.max(1, SAVE.medals[r.medal] || 0);
+  SAVE.keys.blue += r.keys || 0;
   save();
 }
 
@@ -96,18 +102,28 @@ const isOpen = id => SAVE.unlocked >= (UNLOCKS[id] || 1);
 
 const medalLvl = id => SAVE.medals[id] || 0;
 
-// Редкий медальон, которого ещё нет, можно только выбить из кейса
-function medalCost(id) {
-  const l = medalLvl(id), M = MEDALS[id];
-  if (l >= M.max || (M.rare && l === 0)) return null;
-  return M.cost(l);
-}
-function upgradeMedal(id) {
-  const c = medalCost(id);
-  if (!c || !canAfford(c)) return false;
-  pay(c); SAVE.medals[id] = medalLvl(id) + 1; save();
+// Бусты качаются только пазлами из синего кейса: сколько нужно на следующий уровень (null — максимум)
+const boostHave = id => SAVE.boostPuzzles[id] || 0;
+const boostNeed = id => medalLvl(id) < MEDALS[id].max ? BOOST_PUZZLES[medalLvl(id)] : null;
+function upgradeBoost(id) {
+  const need = boostNeed(id);
+  if (!need || boostHave(id) < need) return false;
+  SAVE.boostPuzzles[id] -= need;
+  SAVE.medals[id] = medalLvl(id) + 1;
+  save();
   return true;
 }
+// Гем за 100 открытий: +1 уровень выбранному бусту (boost) или красному оружию (red)
+function useGem(kind, id) {
+  if (!(SAVE.gems[kind] > 0)) return false;
+  if (kind === 'boost') { if (medalLvl(id) >= MEDALS[id].max) return false; SAVE.medals[id] = medalLvl(id) + 1; }
+  else { if (WEAPONS[id].tier !== 'red' || wLvl(id) >= ECON.weaponMax) return false; SAVE.weapons[id] = wLvl(id) + 1; }
+  SAVE.gems[kind]--;
+  save();
+  return true;
+}
+// Ключ дня: бесплатно 1 раз и KEY_ADS раз за рекламу (кнопки в магазине)
+function giveKey(color) { SAVE.keys[color]++; save(); logGot('key', color, 1); return 'ключ'; }
 
 // Одежда и питомцы: купить или надеть. kind: 'outfit' | 'pet'
 const SHOPS = {
@@ -203,18 +219,40 @@ const weaponsOfTier = t => Object.keys(WEAPONS).filter(id => WEAPONS[id].tier ==
 // Пазлы копятся на оружии; уровень поднимается кнопкой во вкладке «Оружие»
 function addPuzzles(id, n) { SAVE.puzzles[id] = wPuzzles(id) + n; }
 
+// Что выдало последнее действие игрока — окно «Получено!» показывает это карточками.
+// Очищается при каждом тапе (hitUi). Одинаковое складывается: 10 сундуков = одна карточка на оружие
+let gotLog = [];
+function logGot(kind, id, n, lvl) {
+  const same = gotLog.find(g => g.kind === kind && g.id === id);
+  if (same) { same.n += n; if (lvl) same.lvl = lvl; } else gotLog.push({ kind, id, n, lvl });
+}
+
 // Пазлы тира достаются случайному оружию этого тира. Если такого оружия ещё нет,
 // они копятся на аккаунте и перейдут в оружие, когда оно появится. Возвращает, кому достались
 function grantPuzzles(tier, n) {
   const ids = weaponsOfTier(tier);
-  if (!ids.length) { SAVE.tierPuzzles[tier] = (SAVE.tierPuzzles[tier] || 0) + n; return `${TIERS[tier].many} пазлы (ждут оружие)`; }
+  if (!ids.length) { SAVE.tierPuzzles[tier] = (SAVE.tierPuzzles[tier] || 0) + n; logGot('tierPuzzle', tier, n); return `${TIERS[tier].many} пазлы-джокеры`; }
   const id = ids[Math.floor(Math.random() * ids.length)];
   addPuzzles(id, n);
+  logGot('puzzle', id, n);
   return WEAPONS[id].name;
 }
-// Накопленные пазлы тира переходят в оружие этого тира, как только оно есть в игре
-for (const t in SAVE.tierPuzzles) {
-  if (SAVE.tierPuzzles[t] && weaponsOfTier(t).length) { const n = SAVE.tierPuzzles[t]; SAVE.tierPuzzles[t] = 0; grantPuzzles(t, n); }
+// Джокеры (на будущее — особые награды): пазлы и гемы цвета, игрок сам выбирает, куда вложить
+function useJokerPuzzles(id) {
+  const t = WEAPONS[id].tier, n = SAVE.tierPuzzles[t] || 0;
+  if (!n || wLvl(id) >= ECON.weaponMax) return false;
+  SAVE.tierPuzzles[t] = 0;
+  addPuzzles(id, n);
+  save();
+  return true;
+}
+function useJokerGem(id) {
+  const t = WEAPONS[id].tier;
+  if (!(SAVE.jokerGems[t] > 0) || wLvl(id) >= ECON.weaponMax) return false;
+  SAVE.jokerGems[t]--;
+  SAVE.weapons[id] = wLvl(id) + 1;
+  save();
+  return true;
 }
 
 // Награда заданий и кейсов: { gold, stars, puzzles: { тир: шт } }. Золото растёт с кампанией
@@ -228,9 +266,13 @@ function rewardText(r) {
 }
 function grantReward(r) {
   const got = [];
-  if (r.gold) { const g = rewardGold(r); SAVE.gold += g; got.push(g + ' ●'); }
-  if (r.stars) { SAVE.stars += r.stars; got.push(r.stars + ' ⭐'); }
+  if (r.gold) { const g = rewardGold(r); SAVE.gold += g; got.push(g + ' ●'); logGot('gold', 'gold', g); }
+  if (r.stars) { SAVE.stars += r.stars; got.push(r.stars + ' ⭐'); logGot('stars', 'stars', r.stars); }
   for (const t in r.puzzles || {}) got.push(`🧩${r.puzzles[t]} → ${grantPuzzles(t, r.puzzles[t])}`);
+  for (const k in r.keys || {}) { SAVE.keys[k] += r.keys[k]; got.push(keyChar(k) + r.keys[k]); logGot('key', k, r.keys[k]); }
+  if (r.gems) { SAVE.gems.boost += r.gems; got.push(`💎${r.gems}`); logGot('gem', 'boost', r.gems); }
+  for (const t in r.jokerPuzzles || {}) { SAVE.tierPuzzles[t] = (SAVE.tierPuzzles[t] || 0) + r.jokerPuzzles[t]; got.push(`★🧩${r.jokerPuzzles[t]}`); logGot('tierPuzzle', t, r.jokerPuzzles[t]); }
+  for (const t in r.jokerGems || {}) { SAVE.jokerGems[t] = (SAVE.jokerGems[t] || 0) + r.jokerGems[t]; got.push(`★💎${r.jokerGems[t]}`); logGot('jokerGem', t, r.jokerGems[t]); }
   save();
   return got.join('  ');
 }
@@ -272,13 +314,20 @@ function claimChest(i) {
 // ------------------------------------------------------------
 
 const localDay = () => Math.floor((Date.now() / 60000 - new Date().getTimezoneOffset()) / 1440);
-const subActive = () => SAVE.sub && SAVE.sub.until > Date.now();
-// Новый день: дневные лимиты обнуляются, подписка выдаёт билеты
+// Подписки: бонусы — по лучшей из активных, билеты и рейды — сумма
+const subOn = i => SAVE.subs[i] === 'forever' || SAVE.subs[i] > Date.now();
+const subsOn = () => SHOP.subs.map((P, i) => i).filter(subOn);
+const subBest = (key, base) => subsOn().reduce((m, i) => Math.max(m, SHOP.subs[i][key] || base), base);
+const subSum = key => subsOn().reduce((s, i) => s + (SHOP.subs[i][key] || 0), 0);
+const runSpeedMax = () => subBest('speed', 1);
+const freeRerolls = () => 1 + subBest('rerolls', 0); // «Новый набор» без рекламы за бой
+const subGoldMul = () => subBest('goldMul', 1);
+// Новый день: дневные лимиты обнуляются, подписки выдают билеты
 function today() {
   const id = localDay();
   if (!SAVE.day || SAVE.day.id !== id) {
     SAVE.day = { id, n: {} };
-    if (subActive()) SAVE.tickets += SHOP.subs[SAVE.sub.tier].tickets;
+    SAVE.tickets += subSum('tickets');
     save();
   }
   return SAVE.day;
@@ -302,13 +351,21 @@ function openChest(id) {
     return grantReward({ gold: 200, puzzles: { [tier]: 10 } });
   }
   if (id === 'boost') {
-    // Сначала новый редкий медальон, потом +1 уровень любого незакрытого медальона/тотема, иначе золото
-    const fresh = Object.keys(MEDALS).filter(m => MEDALS[m].rare && !medalLvl(m));
-    const up = Object.keys(MEDALS).filter(m => medalLvl(m) && medalLvl(m) < MEDALS[m].max || (!MEDALS[m].rare && !medalLvl(m)));
-    const pick = a => a[Math.floor(Math.random() * a.length)];
-    if (fresh.length) { const m = pick(fresh); SAVE.medals[m] = 1; save(); return 'Новый медальон: ' + MEDALS[m].name; }
-    if (up.length) { const m = pick(up); SAVE.medals[m] = medalLvl(m) + 1; save(); return `${MEDALS[m].name}: ур. ${medalLvl(m)}`; }
-    return grantReward({ gold: 1000 });
+    // 1 пазл случайного буста, который ещё можно качать; если все на максимуме — золото
+    const pool = Object.keys(MEDALS).filter(m => medalLvl(m) < MEDALS[m].max);
+    if (!pool.length) return grantReward({ gold: 1000 });
+    const m = pool[Math.floor(Math.random() * pool.length)];
+    SAVE.boostPuzzles[m] = boostHave(m) + 1;
+    save();
+    logGot('boostPuzzle', m, 1);
+    return 'Пазл: ' + MEDALS[m].name;
+  }
+  if (id === 'red') {
+    let r = Math.random(), tier = 'purple';
+    for (const [t, w] of RED_CHEST_TIERS) { if ((r -= w) <= 0) { tier = t; break; } }
+    const to = grantPuzzles(tier, 1);
+    save();
+    return `${TIERS[tier].name} пазл: ${to}`;
   }
   return grantReward(C.reward);
 }
@@ -336,6 +393,9 @@ function openWithKey(id) {
   const k = CHESTS[id].key;
   if (!(SAVE.keys[k] > 0)) return null;
   SAVE.keys[k]--;
+  // Каждые GEM_EVERY открытий — гем на выбор
+  SAVE.chestOpens[id] = (SAVE.chestOpens[id] || 0) + 1;
+  if (SAVE.chestOpens[id] % GEM_EVERY === 0) { SAVE.gems[id] = (SAVE.gems[id] || 0) + 1; logGot('gem', id, 1); }
   return openChest(id);
 }
 
@@ -361,15 +421,46 @@ function buyChapter(k) {
   const o = SHOP.chapterOffer(k);
   SAVE.chapterBought.push(k);
   SAVE.keys.blue += o.keys.blue; SAVE.keys.red += o.keys.red;
-  return grantReward({ gold: o.gold, stars: o.stars }) + `  🔑${o.keys.blue} синих  🔑${o.keys.red} красный`;
+  if (o.keys.blue) logGot('key', 'blue', o.keys.blue);
+  if (o.keys.red) logGot('key', 'red', o.keys.red);
+  return grantReward({ gold: o.gold, stars: o.stars }) + `  ${KB}${o.keys.blue} синих  ${KR}${o.keys.red} красный`;
 }
 
-// Подписка (в браузере — тестовая активация): билеты каждый день, первый день — сразу
+// Подписка (в браузере — тестовая активация): награда сразу и билеты первого дня.
+// Продление добавляет дни к оставшимся; days: 0 — навсегда
 function activateSub(tier) {
+  const P = SHOP.subs[tier];
   today();
-  SAVE.sub = { tier, until: Date.now() + SHOP.subDays * 86400000 };
-  SAVE.tickets += SHOP.subs[tier].tickets;
-  save();
+  SAVE.subs[tier] = P.days ? Math.max(Date.now(), SAVE.subs[tier] || 0) + P.days * 86400000 : 'forever';
+  SAVE.tickets += P.tickets;
+  return grantReward(P.now);
+}
+// Награда дня подписки — кнопкой, раз в день
+function claimSubDaily(tier) {
+  if (!subOn(tier) || dayUsed('sub' + tier)) return null;
+  dayUse('sub' + tier);
+  return grantReward(SHOP.subs[tier].daily);
+}
+// «Неделя подписчика»: раз в день при любой активной подписке, по кругу из 7 наград
+function claimSubWeek() {
+  const n = subsOn().length;
+  if (!n || dayUsed('subWeek')) return null;
+  dayUse('subWeek');
+  const k = n >= 2 ? 2 : 1, r = SHOP.subWeek[SAVE.subWeek % 7], x = {};
+  for (const key in r) x[key] = typeof r[key] === 'number' ? r[key] * k : Object.fromEntries(Object.entries(r[key]).map(([a, v]) => [a, v * k]));
+  SAVE.subWeek++;
+  return grantReward(x);
+}
+// Рейд: награда за повтор пройденной главы без боя (рейды дают подписки)
+const raidsLeft = () => Math.max(0, subSum('raids') - dayUsed('raid'));
+function raid(n, d) {
+  if (!SAVE.cleared[clearKey(n, d)] || !raidsLeft()) return null;
+  dayUse('raid');
+  const r = bossReward(n, false, d);
+  SAVE.gold += r.gold;
+  logGot('gold', 'gold', r.gold);
+  grantReward({ puzzles: r.puzzles });
+  return `Рейд: глава ${n}`;
 }
 
 // ------------------------------------------------------------
@@ -391,7 +482,7 @@ function applyMeta(h) {
   h.magnet *= SAVE.pet === 'owl' ? 1.6 : 1;
   h.goldMul = 1;
   h.xpMul = 1;
-  h.revive = false;
+  h.revive = subBest('revive', false); // Золотая подписка: 1 воскрешение за бой
 }
 
 // Пассивки открытых героев: множитель урона для каждого оружия
@@ -404,22 +495,16 @@ function heroBonuses() {
   return b;
 }
 
-// Награда за прохождение уровня (кейс): золото, осколки и, возможно, медальон
+// Награда за прохождение уровня (кейс): золото, осколки, пазлы и, на некоторых главах, синие ключи
 // Сложность d открыта на главе n: лёгкая — если глава открыта, остальные — после прохождения предыдущей
 const diffOpen = (n, d) => n <= SAVE.unlocked && (d === 0 || !!SAVE.cleared[clearKey(n, d - 1)]);
 
 function bossReward(n, first, d = 0) {
   const r = { ...ECON.reward100(n, first) };
-  r.gold = Math.round(r.gold * DIFFS[d].gold);
+  r.gold = Math.round(r.gold * DIFFS[d].gold * subGoldMul());
   // Пазлы по сложности: при повторе вдвое меньше
   r.puzzles = {};
   for (const t in DIFFS[d].puzzles) r.puzzles[t] = first ? DIFFS[d].puzzles[t] : Math.max(1, Math.ceil(DIFFS[d].puzzles[t] / 2));
-  if (first && ECON.firstClearMedal[n]) {
-    r.medal = ECON.firstClearMedal[n];
-  } else if (!first && Math.random() < ECON.replayMedalChance) {
-    const pool = Object.keys(MEDALS).filter(id => MEDALS[id].rare && !medalLvl(id) && !Object.values(ECON.firstClearMedal).includes(id));
-    if (pool.length) r.medal = pool[Math.floor(Math.random() * pool.length)];
-    else r.shards += 2;
-  }
+  if (first && ECON.firstClearKeys[n]) r.keys = ECON.firstClearKeys[n];
   return r;
 }

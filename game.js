@@ -6,7 +6,7 @@
 // ============================================================
 
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+let ctx = canvas.getContext('2d');
 
 // SAFE_T / SAFE_B — отступы под часами/вырезом камеры и под полоской «домой» (iPhone)
 let W = 0, H = 0, DPR = 1, SCALE = 1, SAFE_B = 0, SAFE_T = 0;
@@ -92,14 +92,16 @@ function newGame(state = 'play', mode = 'endless', level = 0, diff = 0) {
     heroBonus: heroBonuses(), evo: curEvo(),
     active: { t: 0, cd: 5 },        // активка героя: t — сколько ещё действует, cd — до готовности
     pendingWeapons: 0,              // убит промежуточный моб — ждёт выбор оружия
-    rerolls: { up: 0, weapon: 0 },  // сколько раз нажат «Новый набор» (первый раз бесплатно)
+    rerolls: { up: 0, weapon: 0 },  // сколько раз нажат «Новый набор» (бесплатно: 1 + бонус подписки)
+    speed: Math.min(S.speed || 1, runSpeedMax()), // скорость боя (×1.5 / ×2 — в подписке)
     nextEliteT: ECON.eliteEvery,
     stats: { total: {}, sec: {} },  // урон по источникам: всего и по секундам (последние 10 с)
     spawnAcc: 0, nextElite: 120, nextSwarm: 60, bossCount: 0, nextPack: ECON.packEvery,
     hazards: [], hazardAcc: 0,
     pendingLevels: 0, choices: null, cardRects: [],
-    gold: 0, revived: false, hatch: null, result: null,
+    gold: 0, revived: false, hatch: null, result: null, slash: null,
     pet: { x: -18, y: -14, cd: 1 },
+    cat: { x: 16, y: 10, face: 1, walk: 0, pounce: null }, // кот Жора (шапка с ушками)
     // Кампания: цель по убийствам, текущая волна, пройденные вехи (0/1/2), босс и награды забега
     camp: mode === 'camp'
       ? { dur: ECON.bossTime(level), wave: 0, got: 0, elites: 0, boss: null, won: null, earned: { gold: 0, shards: 0 } }
@@ -451,7 +453,7 @@ function finishRun(outcome) {
       const was = SAVE.unlocked;
       SAVE.unlocked = Math.max(SAVE.unlocked, Math.min(CAMPAIGN_LEVELS, n + 1));
       R.opened = Object.keys(UNLOCKS).filter(id => was < UNLOCKS[id] && SAVE.unlocked >= UNLOCKS[id]);
-      R.first = first; R.boss = r; R.medal = r.medal;
+      R.first = first; R.boss = r; R.keys = r.keys;
       R.gold += r.gold; R.shards += r.shards;
     }
   }
@@ -541,6 +543,38 @@ function shoot(x, y, ang, speed, dmg, pierce, color, r, src) {
   G.bullets.push({ x, y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg, pierce, color, r, src, life: 1.6, hit: new Set(), dead: false });
 }
 
+// Сюрикен: четыре стальных луча и дырка в центре; rot — угол вращения
+function drawShuriken(x, y, r, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.fillStyle = '#1a1222';
+  ctx.beginPath();
+  for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4, rr = k % 2 ? r * 0.42 : r + 1.5; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.fill();
+  ctx.fillStyle = '#c9d3e0';
+  ctx.beginPath();
+  for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4, rr = k % 2 ? r * 0.3 : r; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  ctx.fill();
+  ctx.fillStyle = '#f4f7fb';
+  for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r); ctx.lineTo(Math.cos(a + 0.5) * r * 0.3, Math.sin(a + 0.5) * r * 0.3); ctx.fill(); }
+  ctx.fillStyle = '#1a1222';
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+// Стрела лука: древко по направлению полёта, стальной наконечник, оперение
+function drawArrow(b) {
+  const a = Math.atan2(b.vy, b.vx);
+  ctx.save();
+  ctx.translate(b.x, b.y); ctx.rotate(a);
+  ctx.strokeStyle = '#c99a5b'; ctx.lineWidth = 1.6;
+  ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(5, 0); ctx.stroke();
+  ctx.fillStyle = '#e6edf5';
+  ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(4, -2.6); ctx.lineTo(4, 2.6); ctx.fill();
+  ctx.fillStyle = '#f4f0e6';
+  ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(-12, -3); ctx.lineTo(-7, 0); ctx.lineTo(-12, 3); ctx.fill();
+  ctx.restore();
+}
+
 function shootEnemy(x, y, ang, speed, dmg) {
   G.ebullets.push({ x, y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, dmg, r: 5, life: 4, dead: false });
 }
@@ -563,7 +597,8 @@ function wStats(id) {
   const start = id === heroWeapon() ? ev.start : 0;
   if (id === 'wand') { s.volley += 0.25 * medalLvl('wandDouble'); s.count += start; if (on) { s.cd *= 0.5; s.count += ev.extra; } }
   if (id === 'orbit') { s.count += medalLvl('bladeExtra') + start; if (on) s.count += ev.extra; }
-  if (id === 'aura') { s.radius += 12 * start; if (on) s.radius = s.radius * 1.5 + 12 * ev.extra; }
+  if (id === 'stench') { s.radius += 12 * start; if (on) { s.radius = s.radius * 2 + 12 * ev.extra; s.tick *= 0.5; } }
+  if (id === 'aura') { s.radius += 12 * start; if (on) { s.arc = TAU; s.radius = s.radius * 1.33 + 12 * ev.extra; } }
   if (id === 'nova') { s.volley += 0.25 * medalLvl('novaDouble'); s.count += 3 * start; if (on) { s.cd *= 0.33; s.count += 3 * ev.extra; } }
   return s;
 }
@@ -623,20 +658,42 @@ function updateWeapons(dt) {
     }
   }
 
-  if (w.aura) {
-    const s = wStats('aura');
-    T.aura = (T.aura || 0) - dt;
-    if (T.aura <= 0) {
-      T.aura = s.tick * h.cdMul;
-      const dmg = weaponDmg('aura', s.dmg);
+  // Аура: вонючее облако жжёт всех рядом и замедляет
+  if (w.stench) {
+    const s = wStats('stench');
+    T.stench = (T.stench || 0) - dt;
+    if (T.stench <= 0) {
+      T.stench = s.tick * h.cdMul;
+      const dmg = weaponDmg('stench', s.dmg);
       for (const e of query(h.x, h.y, s.radius + MAX_ER, near)) {
         if ((e.x - h.x) ** 2 + (e.y - h.y) ** 2 < (s.radius + e.r) ** 2) {
           if (s.slow) { e.slowK = s.slow; e.slowT = G.t + 0.6; }
-          hurt(e, dmg, 0, 0, 'aura');
+          hurt(e, dmg, 0, 0, 'stench');
         }
       }
     }
   }
+
+  // Меч: взмах дугой в сторону ближайшего врага в досягаемости
+  if (w.aura) {
+    const s = wStats('aura');
+    T.aura = (T.aura || 0) - dt;
+    if (T.aura <= 0) {
+      const tg = nearestEnemies(1, s.radius + MAX_ER)[0];
+      if (tg) {
+        T.aura = s.cd * h.cdMul;
+        const dir = Math.atan2(tg.y - h.y, tg.x - h.x), dmg = weaponDmg('aura', s.dmg);
+        G.slash = { dir, arc: s.arc, r: s.radius, t: 0.18 };
+        for (const e of query(h.x, h.y, s.radius + MAX_ER, near)) {
+          const dx = e.x - h.x, dy = e.y - h.y, d = Math.hypot(dx, dy) || 1;
+          if (d > s.radius + e.r) continue;
+          const da = Math.abs(((Math.atan2(dy, dx) - dir + Math.PI * 3) % TAU) - Math.PI);
+          if (da <= s.arc / 2 || d < e.r + 8) hurt(e, dmg, dx / d * s.push, dy / d * s.push, 'aura');
+        }
+      }
+    }
+  }
+  if (G.slash) { G.slash.t -= dt; if (G.slash.t <= 0) G.slash = null; }
 
   if (w.nova) {
     const s = wStats('nova');
@@ -653,6 +710,73 @@ function updateWeapons(dt) {
 }
 
 // Питомец летает за героем; светлячок ещё и стреляет
+// Кот Жора: бегает за героем; когда героя бьют, прыгает на обидчика и оставляет след когтей (без урона)
+function catScratch(e) {
+  e.claw = G.t + 1;
+  G.cat.pounce = { e, t: 0.35 };
+}
+function updateCat(dt) {
+  if (!OUTFITS[SAVE.outfit].cat) return;
+  const c = G.cat, h = G.hero;
+  let tx, ty, sp;
+  if (c.pounce) {
+    c.pounce.t -= dt;
+    if (c.pounce.t <= 0 || c.pounce.e.dead) c.pounce = null;
+  }
+  if (c.pounce) { tx = c.pounce.e.x; ty = c.pounce.e.y + 4; sp = 520; }
+  else {
+    // Кот отстаёт и догоняет: рядом с героем стоит, чем дальше — тем быстрее бежит.
+    // Цель — точка в 20 px от героя со стороны кота, поэтому он не мечется, когда герой разворачивается
+    const hx = c.x - h.x, hy = c.y - h.y + 9, hd = Math.hypot(hx, hy) || 1;
+    if (hd > 500) { c.x = h.x - 20 * h.face; c.y = h.y + 9; c.walk = 0; return; } // совсем потерялся — рядом
+    if (hd < 30) { c.walk = 0; return; }
+    tx = h.x + hx / hd * 20; ty = h.y + 9 + hy / hd * 20;
+    sp = Math.min(380, 30 + (hd - 30) * 3.2);
+  }
+  const dx = tx - c.x, dy = ty - c.y, d = Math.hypot(dx, dy);
+  if (d < 1) { c.walk = 0; return; }
+  const step = Math.min(d, sp * dt);
+  c.x += dx / d * step; c.y += dy / d * step;
+  c.walk += dt * Math.min(2, sp / 120);
+  if (Math.abs(dx) > 2) c.face = dx > 0 ? 1 : -1;
+}
+
+// Пиксельный рыжий кот 8×6: полосы, белая грудка, хвост трубой
+const CAT_PAL = { 0: '#14141c', 1: '#f08a2a', 2: '#c45f12', 3: '#fbf7f4', 4: '#f7a8c8', 5: '#2a1a10' };
+const CAT_SPRITE = [
+  '.......2',
+  '1.1....2',
+  '1111..2.',
+  '15151.2.',
+  '11411112',
+  '.3111211',
+  '.1.1.1.1',
+];
+function drawCat(x, y, face, walk, px = 2) {
+  const rows = CAT_SPRITE, w = 8, ox = x - w * px / 2, oy = y - rows.length * px;
+  const step = walk > 0 ? Math.floor(walk * 10) % 2 : 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath(); ctx.ellipse(x, y + 1, 7, 2, 0, 0, TAU); ctx.fill();
+  for (let r = 0; r < rows.length; r++) for (let c = 0; c < w; c++) {
+    let ch = rows[r][face < 0 ? c : w - 1 - c];
+    if (r === rows.length - 1 && step) ch = rows[r][face < 0 ? (c + 1) % w : w - 1 - ((c + 1) % w)];
+    if (ch === '.') continue;
+    ctx.fillStyle = CAT_PAL[ch];
+    ctx.fillRect(ox + c * px, oy + r * px, px + 0.05, px + 0.05);
+  }
+}
+// След когтей на враге: три розовые царапины, гаснут за секунду
+function drawClaw(e) {
+  const k = (e.claw - G.t);
+  if (k <= 0) return;
+  ctx.globalAlpha = Math.min(1, k * 1.5);
+  ctx.strokeStyle = '#ffd6e6'; ctx.lineWidth = 2;
+  for (let i = -1; i <= 1; i++) {
+    ctx.beginPath(); ctx.moveTo(e.x - e.r * 0.6 + i * 4, e.y - e.r * 0.7); ctx.lineTo(e.x + e.r * 0.5 + i * 4, e.y + e.r * 0.6); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
 function updatePet(dt) {
   if (SAVE.pet === 'none') return;
   const p = G.pet, h = G.hero;
@@ -833,6 +957,7 @@ function updateHero(dt) {
     if (e.dead || h.inv > 0) continue;
     if ((e.x - h.x) ** 2 + (e.y - h.y) ** 2 < (e.r + h.r) ** 2) {
       damageHero(e.dmg);
+      if (OUTFITS[SAVE.outfit].cat) catScratch(e);
       if (G.state !== 'play') return;
       if (e.boss) {
         // Босс отбрасывает героя и прерывает рывок, иначе он «залипает» и бьёт без остановки
@@ -901,7 +1026,7 @@ function rollChoices() {
     if (l < PASSIVES[id].max) stats.push({ kind: 'p', id, lvl: l + 1 });
   }
   shuffle(ups);
-  // Глава со щитом босса: Пробитие Жезла (пока не взято до конца) всегда в выборе
+  // Глава со щитом босса: Пробитие Лука (пока не взято до конца) всегда в выборе
   const pi = has('z') ? ups.findIndex(c => c.id === 'wand' && c.up === 'pierce') : -1;
   if (pi > 0) ups.unshift(ups.splice(pi, 1)[0]);
   const res = ups.slice(0, 3).concat(shuffle(stats).slice(0, 1));
@@ -951,7 +1076,7 @@ function pickAll() {
   for (const c of G.choices) applyChoice(c);
   closeChoices();
 }
-// «Новый набор»: первый раз за бой бесплатно, дальше за рекламу
+// «Новый набор»: 1 раз за бой бесплатно (с подпиской — больше), дальше за рекламу
 function rerollChoices(free) {
   const k = G.state === 'weaponpick' ? 'weapon' : 'up';
   if (free) G.rerolls[k]++;
@@ -989,6 +1114,7 @@ function update(dt) {
   buildGrid();
   updateWeapons(dt);
   updatePet(dt);
+  updateCat(dt);
   updateBullets(dt);
   updateEnemyBullets(dt);
   if (G.state !== 'play') return;
@@ -1030,15 +1156,17 @@ const HERO_LEGS = [
   ['.4....4.', '.0....0.'],
 ];
 // 1 и 3 подменяются скином; 5–8 — цвета головных уборов
-const HERO_PAL = { 0: '#14141c', 1: '#f2c9a0', 2: '#14141c', 3: '#3e8ef7', 4: '#5a3d26', 5: '#7a5230', 6: '#2f5a3a', 7: '#e8e0d0', 8: '#ffd166' };
+const HERO_PAL = { 0: '#14141c', 1: '#f2c9a0', 2: '#14141c', 3: '#3e8ef7', 4: '#5a3d26', 5: '#7a5230', 6: '#2f5a3a', 7: '#e8e0d0', 8: '#ffd166', a: '#f7a8c8', b: '#fbf7f4' };
 const PX = 2.4;
 
 // Пиксельный герой с центром в (x, y); px — размер пикселя
 function drawHeroSprite(x, y, px, face, legs, hero, outfit) {
-  const pal = { ...HERO_PAL, ...HEROES[hero].pal };
+  const pal = { ...HERO_PAL, ...HEROES[hero].pal, ...OUTFITS[outfit].pal }; // наряд может перекрасить одежду
   const hat = OUTFITS[outfit].rows;
-  const rows = hat.concat(HERO_BODY, HERO_LEGS[legs]);
-  const ox = x - 4 * px, oy = y - (HERO_BODY.length + 2) * px / 2 - 2 - hat.length * px;
+  let body = HEROES[hero].body || HERO_BODY; // у героя может быть свой силуэт (ниндзя — маска и повязка)
+  if (OUTFITS[outfit].head) body = OUTFITS[outfit].head.concat(body.slice(4)); // капюшон вместо головы
+  const rows = hat.concat(body, HERO_LEGS[legs]);
+  const ox = x - 4 * px, oy = y - (body.length + 2) * px / 2 - 2 - hat.length * px;
   for (let r = 0; r < rows.length; r++) {
     for (let c = 0; c < 8; c++) {
       const ch = rows[r][face < 0 ? 7 - c : c];
@@ -1488,13 +1616,23 @@ function drawWorld() {
   else { drawDecor(cam, vw, vh); drawHazards(inView); }
   if (G.hatch) drawHatch(G.hatch.x, G.hatch.y);
 
-  if (G.weapons.aura) {
-    const s = wStats('aura');
-    const pulse = 1 + Math.sin(G.t * 6) * 0.03;
-    ctx.fillStyle = 'rgba(255,138,76,0.10)';
-    ctx.strokeStyle = 'rgba(255,138,76,0.45)';
+  if (G.weapons.stench) {
+    const s = wStats('stench'), pulse = 1 + Math.sin(G.t * 6) * 0.03;
+    ctx.fillStyle = 'rgba(168,194,86,0.12)';
+    ctx.strokeStyle = 'rgba(168,194,86,0.5)';
     ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(h.x, h.y, s.radius * pulse, 0, TAU); ctx.fill(); ctx.stroke();
+  }
+
+  // След взмаха меча: светлый серп, гаснет за долю секунды
+  if (G.slash) {
+    const S2 = G.slash, k = S2.t / 0.18, a0 = S2.dir - S2.arc / 2, a1 = S2.dir + S2.arc / 2;
+    ctx.globalAlpha = 0.75 * k;
+    ctx.fillStyle = 'rgba(230,236,245,0.35)';
+    ctx.beginPath(); ctx.arc(h.x, h.y, S2.r, a0, a1); ctx.arc(h.x, h.y, S2.r * 0.55, a1, a0, true); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#f4f7fb'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(h.x, h.y, S2.r, a0, a1); ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   for (const g of G.gems) {
@@ -1518,8 +1656,9 @@ function drawWorld() {
     ctx.beginPath(); ctx.moveTo(g.x, g.y - s); ctx.lineTo(g.x + s * 0.7, g.y); ctx.lineTo(g.x, g.y + s); ctx.lineTo(g.x - s * 0.7, g.y); ctx.fill();
   }
 
-  for (const e of G.enemies) if (inView(e)) drawEnemy(e);
+  for (const e of G.enemies) if (inView(e)) { drawEnemy(e); if (e.claw) drawClaw(e); }
 
+  if (OUTFITS[SAVE.outfit].cat) drawCat(G.state === 'menu' ? h.x + 18 : G.cat.x, G.state === 'menu' ? h.y + 12 : G.cat.y, G.state === 'menu' ? -1 : G.cat.face, G.state === 'menu' ? 0 : G.cat.walk);
   drawHero(h);
   if (SAVE.pet !== 'none') drawPetSprite(SAVE.pet, G.state === 'menu' ? h.x - 18 : G.pet.x, G.state === 'menu' ? h.y - 14 : G.pet.y);
 
@@ -1528,16 +1667,13 @@ function drawWorld() {
     for (let i = 0; i < n; i++) {
       const a = G.orbAng + (i / n) * TAU;
       const bx = h.x + Math.cos(a) * s.radius, by = h.y + Math.sin(a) * s.radius;
-      ctx.fillStyle = 'rgba(125,249,255,0.18)';
-      ctx.beginPath(); ctx.arc(bx, by, 11, 0, TAU); ctx.fill();
-      ctx.save(); ctx.translate(bx, by); ctx.rotate(a + Math.PI / 2);
-      ctx.fillStyle = '#7df9ff'; ctx.fillRect(-8, -2, 16, 4);
-      ctx.restore();
+      drawShuriken(bx, by, 9, G.t * 18 + i);
     }
   }
 
   for (const b of G.bullets) {
     if (!inView(b)) continue;
+    if (b.src === 'wand') { drawArrow(b); continue; }
     ctx.fillStyle = b.color;
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
   }
@@ -1618,7 +1754,7 @@ function drawHud() {
   ctx.fillText(c ? `Глава ${G.level}` + (G.diff ? ' · ' + DIFFS[G.diff].name : '') : fmtTime(G.t), W / 2, top + 16);
   ctx.textAlign = 'left';
   ctx.font = 'bold 13px system-ui, sans-serif';
-  ctx.fillText('Герой ' + h.level, 12, top + 16);
+  ctx.fillText('Ур. ' + h.level, 12, top + 16);
   ctx.fillStyle = '#ffd166';
   ctx.fillText('● ' + Math.floor(G.gold), 12, top + 36);
   ctx.textAlign = 'right';
@@ -1626,13 +1762,27 @@ function drawHud() {
   ctx.fillText('☠ ' + G.kills, W - 12, top + 16);
 
   // Кнопка паузы — на телефоне иначе в меню не выйти
-  const pb = { x: W - 12 - 36, y: top + 38, w: 36, h: 36, act: () => setState('pause') };
-  ctx.fillStyle = 'rgba(27,29,38,0.8)';
-  roundRect(pb.x, pb.y, pb.w, pb.h, 8); ctx.fill();
-  ctx.fillStyle = '#c8cbd6';
-  ctx.fillRect(pb.x + 12, pb.y + 10, 4, 16);
-  ctx.fillRect(pb.x + 20, pb.y + 10, 4, 16);
+  const pb = { x: W - 12 - 44, y: top + 34, w: 44, h: 44, act: () => setState('pause') };
+  pxBox(pb.x, pb.y, pb.w, pb.h, UI.base);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(pb.x + 15, pb.y + 13, 5, 18);
+  ctx.fillRect(pb.x + 24, pb.y + 13, 5, 18);
   ui.push(pb);
+  // Скорость боя (подписка): тап переключает ×1 → ×1.5 → ×2
+  const max = runSpeedMax();
+  if (max > 1) {
+    const sb = { x: pb.x - 52, y: pb.y, w: 44, h: 44, act: () => {
+      G.speed = G.speed >= max ? 1 : Math.min(max, G.speed + 0.5);
+      S.speed = G.speed; saveSettings();
+    } };
+    pxBox(sb.x, sb.y, sb.w, sb.h, G.speed > 1 ? UI.gold : UI.base);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('×' + G.speed, sb.x + sb.w / 2, sb.y + sb.h / 2 + 1);
+    ctx.textBaseline = 'top';
+    ui.push(sb);
+  }
   drawDmgPanel(top + 112);
 
   // Прогресс уровня кампании с отметками наград на 25% и 50%
@@ -1651,7 +1801,7 @@ function drawHud() {
     ctx.textAlign = 'center';
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillStyle = '#c8cbd6';
-    ctx.fillText(c.boss ? 'Убей босса!' : `До босса ${fmtTime(Math.max(0, c.dur - G.t))}`, W / 2, y + 16);
+    ctx.fillText(c.boss ? 'Убей босса!' : `До босса ${fmtTime(Math.max(0, c.dur - G.t))}`, W / 2, y + 19);
     y += 36;
   }
 
@@ -1732,10 +1882,10 @@ function drawDmgTable(x, y, w, rows, fmt, rh = 22) {
 // Свёрнуто — маленькая кнопка с графиком
 function drawDmgPanel(py) {
   if (!S.dmgPanel) {
-    const b = { x: W - 12 - 36, y: py - 30, w: 36, h: 36, act: () => { S.dmgPanel = true; saveSettings(); } };
-    ctx.fillStyle = 'rgba(27,29,38,0.8)'; roundRect(b.x, b.y, b.w, b.h, 8); ctx.fill();
-    ctx.fillStyle = '#c8cbd6';
-    [10, 16, 7].forEach((hh, i) => ctx.fillRect(b.x + 9 + i * 7, b.y + 27 - hh, 5, hh));
+    const b = { x: W - 12 - 44, y: py - 30, w: 44, h: 44, act: () => { S.dmgPanel = true; saveSettings(); } };
+    pxBox(b.x, b.y, b.w, b.h, UI.base);
+    ctx.fillStyle = '#fff';
+    [10, 16, 7].forEach((hh, i) => ctx.fillRect(b.x + 13 + i * 7, b.y + 31 - hh, 5, hh));
     ui.push(b);
     return;
   }
@@ -1746,11 +1896,11 @@ function drawDmgPanel(py) {
     const b = { x: px + 6 + i * 64, y: py + 6, w: 60, h: 22 }, on = S.dmgTab === id;
     ctx.fillStyle = on ? '#ffd166' : 'rgba(44,48,64,0.9)'; roundRect(b.x, b.y, b.w, b.h, 6); ctx.fill();
     text(name, b.x + b.w / 2, b.y + 11, 11, on ? '#14141c' : '#c8cbd6', 'center');
-    ui.push({ ...b, act: () => { S.dmgTab = id; saveSettings(); } });
+    ui.push({ x: b.x - 4, y: b.y - 8, w: b.w + 4, h: b.h + 16, act: () => { S.dmgTab = id; saveSettings(); } });
   });
   const x = { x: px + pw - 28, y: py + 6, w: 22, h: 22, act: () => { S.dmgPanel = false; saveSettings(); } };
   text('✕', x.x + 11, x.y + 11, 13, '#9a9eae', 'center');
-  ui.push(x);
+  ui.push({ x: x.x - 8, y: x.y - 8, w: x.w + 16, h: x.h + 16, act: x.act });
   drawDmgTable(px + 10, py + 34, pw - 20, rows, r => fmtNum(r.v) + (S.dmgTab === 'dps' ? '/с' : ''));
 }
 
@@ -1805,8 +1955,11 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  update(dt);
+  // Ускоренный бой — несколькими шагами, чтобы снаряды не пролетали сквозь врагов
+  const sp = G.state === 'play' ? G.speed : 1, steps = Math.ceil(sp);
+  for (let i = 0; i < steps; i++) update(dt * sp / steps);
   render();
   requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
+// Цикл — после загрузки всех скриптов (ui.js подключается после game.js)
+window.addEventListener('load', () => requestAnimationFrame(frame));

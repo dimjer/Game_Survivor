@@ -362,6 +362,26 @@ function lockIcon(x, y, s, color) {
   roundRect(x - s * 0.3, y - s * 0.12, s * 0.6, s * 0.46, s * 0.08); ctx.fill();
 }
 
+// Зелёный кружок с числом — «тут есть бесплатное». Слегка пульсирует, чтобы бросался в глаза
+function freeBadge(x, y, n) {
+  const r = 9 + Math.sin(performance.now() / 220) * 1.2;
+  ctx.fillStyle = OUTLINE; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#57e389'; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  text(String(n), x, y + 0.5, 11, '#fff', 'center');
+}
+
+// Сколько бесплатного ждёт в каждом разделе магазина (для значков на вкладках)
+function shopFree() {
+  const f = k => (dayUsed(k) ? 0 : 1), subs = subsOn();
+  return {
+    shelves: f('starsFree') + f('goldFree'),
+    chests: f('blueKeyFree') + f('redKeyFree'),
+    stars: 0,
+    sub: subs.filter(i => !dayUsed('sub' + i)).length + (subs.length ? f('subWeek') : 0),
+  };
+}
+const shopFreeTotal = () => Object.values(shopFree()).reduce((a, b) => a + b, 0);
+
 function drawTabBar() {
   const tb = tabBarH(), y = H - tb, tabs = tabsList();
   const w = Math.min(110, W / tabs.length), x0 = (W - w * tabs.length) / 2;
@@ -392,6 +412,7 @@ function drawTabBar() {
     drawIcon(t.icon, r.x + w / 2, y + (on ? 22 : 27), 40);
     ctx.restore();
     outlined(t.name, r.x + w / 2, y + 55, on ? 12 : 11, on ? '#fff' : UI.soft, 'center', w - 4);
+    if (t.id === 'shop') { const n = shopFreeTotal(); if (n) freeBadge(r.x + w / 2 + 20, y + (on ? 6 : 11), n); }
     ui.push({ ...r, act: () => setScreen(t.id) });
   });
 }
@@ -578,6 +599,7 @@ function drawCard(r, it) {
   if (it.tile) { drawTile(r, it); return; }
   pxBox(r.x, r.y, r.w, r.h, UI.base);
   if (it.mark) pxFrame(r.x, r.y, r.w, r.h, it.color);
+  else if (it.btn && it.btn.free) pxFrame(r.x, r.y, r.w, r.h, '#57e389');
   const s = 60, ix = r.x + 12, iy = r.y + (r.h - s) / 2 - 2;
   pxInset(ix, iy, s, s);
   if (it.icon) drawIcon(it.icon, ix + s / 2, iy + s / 2, s);
@@ -777,6 +799,8 @@ function drawSheet(name, items, note, segs) {
       const b = { x: r.x + 18 + i * (sw + 6), y: top, w: sw, h: 36 }, on = segs.on === id;
       pxBox(b.x, b.y, b.w, b.h, on ? UI.gold : UI.base, 1);
       outlined(label, b.x + b.w / 2, b.y + 17, 14, on ? '#fff' : UI.soft, 'center', b.w - 10);
+      const free = segs.badge && segs.badge(id);
+      if (free) freeBadge(b.x + b.w - 6, b.y + 4, free);
       ui.push({ ...b, act: () => { if (segs.on !== id) { segs.set(id); menuScroll = 0; } } });
     });
     top += 44;
@@ -919,7 +943,7 @@ function buyBtn(cost, key, limit, give) {
 }
 // «Бесплатно раз в день, потом N раз за рекламу или билет»
 function freeThenAdBtn(key, ads, give) {
-  if (!dayUsed(key + 'Free')) return { label: 'Бесплатно', ok: true, color: '#57e389', act: () => { dayUse(key + 'Free'); done(give()); } };
+  if (!dayUsed(key + 'Free')) return { label: 'Бесплатно', free: true, ok: true, color: '#57e389', act: () => { dayUse(key + 'Free'); done(give()); } };
   if (left(key + 'Ad', ads)) return { label: SAVE.tickets ? '🎫 Билет' : '📺 Реклама', ok: true, color: '#c77dff', act: () => watchAd(() => { dayUse(key + 'Ad'); done(give()); }) };
   return { label: 'Завтра', ok: false, why: 'Лимит на сегодня исчерпан' };
 }
@@ -1030,7 +1054,7 @@ function subItems() {
       info: on ? (got ? 'Получено сегодня — завтра снова' : 'Забери награду дня') : 'Откроется с подпиской',
       btn: !on ? { label: 'Закрыто', ok: false, why: 'Награда дня — для подписчиков' }
         : got ? { label: 'Завтра', ok: false, why: 'Уже получено сегодня' }
-        : { label: 'Забрать', ok: true, color: '#57e389', act: () => done(claimSubDaily(i)) },
+        : { label: 'Забрать', free: true, ok: true, color: '#57e389', act: () => done(claimSubDaily(i)) },
     });
   });
   const n = subsOn().length, day = SAVE.subWeek % 7, R = SHOP.subWeek[day], got = dayUsed('subWeek');
@@ -1041,7 +1065,7 @@ function subItems() {
     tag: 'С двумя подписками и больше — награды вдвое', tagColor: '#c77dff',
     btn: !n ? { label: 'Закрыто', ok: false, why: 'Нужна любая подписка' }
       : got ? { label: 'Завтра', ok: false, why: 'Уже получено сегодня' }
-      : { label: 'Забрать', ok: true, color: '#57e389', act: () => done(claimSubWeek()) },
+      : { label: 'Забрать', free: true, ok: true, color: '#57e389', act: () => done(claimSubWeek()) },
   });
   return items;
 }
@@ -1144,7 +1168,7 @@ const SHEETS = {
   wardrobe: ['ГАРДЕРОБ', () => (wardTab === 'stats' ? statItems() : wardTab === 'heroes' ? heroItems() : shopItems('outfit')), null,
     { tabs: [['stats', 'Прокачка'], ['heroes', 'Герои'], ['outfit', 'Одежда']], get on() { return wardTab; }, set: id => { wardTab = id; } }],
   shop: ['МАГАЗИН', () => shopItemsTab(), () => `🎫 Билеты: ${SAVE.tickets} · ${KB} ${SAVE.keys.blue} · ${KR} ${SAVE.keys.red}`,
-    { tabs: [['shelves', 'Полки'], ['chests', 'Сундуки'], ['stars', 'Звёзды'], ['sub', 'Подписка']], get on() { return shopTab; }, set: id => { shopTab = id; } }],
+    { tabs: [['shelves', 'Полки'], ['chests', 'Сундуки'], ['stars', 'Звёзды'], ['sub', 'Подписка']], get on() { return shopTab; }, set: id => { shopTab = id; }, badge: id => shopFree()[id] }],
   boost: ['БУСТЫ', () => boostItems(), () => SAVE.gems.boost > 0 ? `💎 Гемов: ${SAVE.gems.boost} — выбери буст, получит +1 уровень` : 'Пазлы бустов — в кейсе бустов за синий ключ'],
   pet: ['ПИТОМЕЦ', () => shopItems('pet')],
   catacombs: ['КАТАКОМБЫ', () => catacombItems(), 'Спустись в подземелье — испытания с наградами'],

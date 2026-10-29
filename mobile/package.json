@@ -2,10 +2,11 @@
   "name": "survivor-mobile",
   "private": true,
   "scripts": {
-    "copy": "rm -rf www && mkdir www && cp -R ../index.html ../*.js ../lang ../fonts ../favicon.svg ../apple-touch-icon.png www/",
-    "sync": "npm run copy && npx cap sync ios"
+    "sync": "sh sync.sh ios",
+    "sync:android": "sh sync.sh android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
     "@capacitor/cli": "^8.5.3",
     "@capacitor/core": "^8.5.3",
     "@capacitor/ios": "^8.5.3"

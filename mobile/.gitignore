@@ -1,2 +1,13 @@
 node_modules/
 www/
+
+# Ключи и секреты подписи — никогда в git (хранить отдельно, с резервной копией)
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+GoogleService-Info.plist
+*.p12
+*.p8
+*.mobileprovision
+*.cer

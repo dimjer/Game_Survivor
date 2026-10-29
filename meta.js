@@ -32,7 +32,7 @@ function defaultSave() {
     unlocked: 1,        // максимальный открытый уровень кампании
     cleared: {},        // уровень → сколько раз пройден
     weapons: {},        // id → мета-уровень (по умолчанию 1)
-    loadout: ['orbit', 'aura', 'nova', 'stench'], // оружие, которое может выпасть в бою (кроме оружия героя)
+    loadout: ['orbit', 'aura', 'nova', 'stench', 'axes'], // оружие, которое может выпасть в бою (кроме оружия героя)
     acct: 1,            // уровень аккаунта
     pips: { dmg: 0, crit: 0, hp: 0, cd: 0 }, // шаги прокачки характеристик на текущем уровне аккаунта
     hero: 'orin',
@@ -50,6 +50,13 @@ try {
   if (s) SAVE = Object.assign(defaultSave(), s);
 } catch {}
 if (!HEROES[SAVE.hero]) SAVE.hero = 'orin';
+// Оружие, добавленное обновлением, сразу попадает в набор на бой (если есть место)
+if (!SAVE.seenWeapons) SAVE.seenWeapons = ['wand', 'orbit', 'aura', 'nova', 'stench'];
+for (const id in WEAPONS) {
+  if (SAVE.seenWeapons.includes(id)) continue;
+  SAVE.seenWeapons.push(id);
+  if (id !== HEROES[SAVE.hero].weapon && !SAVE.loadout.includes(id) && SAVE.loadout.length < MAX_RUN_WEAPONS - 1) SAVE.loadout.push(id);
+}
 if (SAVE.sub) { SAVE.subs[SAVE.sub.tier] = SAVE.sub.until; delete SAVE.sub; } // старое сохранение: одна подписка
 function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(SAVE)); } catch {} }
 
@@ -315,7 +322,7 @@ function claimChest(i) {
 
 const localDay = () => Math.floor((Date.now() / 60000 - new Date().getTimezoneOffset()) / 1440);
 // Подписки: бонусы — по лучшей из активных, билеты и рейды — сумма
-const subOn = i => SAVE.subs[i] === 'forever' || SAVE.subs[i] > Date.now();
+const subOn = i => PAID && (SAVE.subs[i] === 'forever' || SAVE.subs[i] > Date.now());
 const subsOn = () => SHOP.subs.map((P, i) => i).filter(subOn);
 const subBest = (key, base) => subsOn().reduce((m, i) => Math.max(m, SHOP.subs[i][key] || base), base);
 const subSum = key => subsOn().reduce((s, i) => s + (SHOP.subs[i][key] || 0), 0);

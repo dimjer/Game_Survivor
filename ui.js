@@ -189,6 +189,13 @@ function weaponIcon(id) {
       for (const [dx, dy, r] of [[-0.14, 0.04, 0.16], [0.1, -0.06, 0.18], [0.05, 0.14, 0.13]]) { ctx.beginPath(); ctx.arc(x + dx * s, y + dy * s, r * s, 0, TAU); ctx.fill(); }
       ctx.strokeStyle = '#6b8a2a'; ctx.lineWidth = s * 0.06;
       ctx.beginPath(); ctx.arc(x - s * 0.08, y - s * 0.26, s * 0.08, Math.PI, 0); ctx.arc(x + s * 0.08, y - s * 0.26, s * 0.08, Math.PI, 0, true); ctx.stroke();
+    } else if (id === 'axes') {
+      // топор: топорище по диагонали и широкое лезвие
+      ctx.save(); ctx.translate(x, y); ctx.rotate(-Math.PI / 4);
+      ctx.fillStyle = '#8a5a30'; ctx.fillRect(-s * 0.04, -s * 0.4, s * 0.08, s * 0.8);
+      ctx.fillStyle = '#e6edf5';
+      ctx.beginPath(); ctx.moveTo(s * 0.03, -s * 0.36); ctx.lineTo(s * 0.32, -s * 0.44); ctx.quadraticCurveTo(s * 0.42, -s * 0.2, s * 0.32, s * 0.02); ctx.lineTo(s * 0.03, -s * 0.08); ctx.fill();
+      ctx.restore();
     } else {
       for (let i = 0; i < 8; i++) { ctx.beginPath(); ctx.arc(x + Math.cos(i * 0.785) * s * 0.3, y + Math.sin(i * 0.785) * s * 0.3, s * 0.06, 0, TAU); ctx.fill(); }
     }
@@ -542,7 +549,7 @@ function drawCampaignTab() {
   const bw = Math.min(W - 32, 340), bx = (W - bw) / 2;
   if (n > SAVE.unlocked) { drawButton({ x: bx, y: f.btnY, w: bw, h: f.bh }, { label: `🔒 Сначала пройди главу ${n - 1}`, dim: true }); return; }
   // Рейд (подписка): пройденная глава на этой сложности — награда без боя
-  if (SAVE.cleared[clearKey(n, selDiff)]) {
+  if (PAID && SAVE.cleared[clearKey(n, selDiff)]) {
     const rw = 104, left = raidsLeft(), sub = subsOn().length;
     drawButton({ x: bx, y: f.btnY, w: rw, h: f.bh }, sub
       ? { label: `⚡ Рейд ${left}`, ...(left ? { color: UI.cyan } : { dim: true }),
@@ -629,7 +636,8 @@ function drawTile(r, it) {
     pxInset(bx, by, bw, 21);
     if (k > 0) { ctx.fillStyle = k >= 1 ? UI.green : it.color; ctx.fillRect(snap(bx + U), snap(by + U), snap((bw - 2 * U) * k), 15); }
     outlined(`${it.bar.v}/${it.bar.max}`, r.x + r.w / 2 + 9, by + 10, 12, '#fff', 'center', bw - 32);
-    puzzlePiece(bx + 12, by + 8, 24, it.color);
+    if (it.bar.icon) drawIcon(it.bar.icon, bx + 12, by + 10, 24);
+    else puzzlePiece(bx + 12, by + 8, 24, it.color);
   }
   if (it.mark) { pxBox(r.x + r.w - 27, r.y - 6, 30, 27, UI.green, 1); outlined('✓', r.x + r.w - 12, r.y + 6, 15, '#fff'); }
   if (it.ready) { pxBox(r.x - 3, r.y - 6, 24, 27, '#e5484d', 1); outlined('!', r.x + 9, r.y + 6, 16, '#fff'); }
@@ -690,23 +698,47 @@ function drawDetail() {
   if (!it) { detail = null; return; }
   ui = [];
   dim(0.72);
-  const w = Math.min(W - 40, 360), x = (W - w) / 2;
-  const lines = wrapText(it.info || '', w - 36, 14);
   const btns = [it.btn, ...(it.extra || []), it.actLabel && { label: it.actLabel, ok: true, color: UI.base, act: it.act }].filter(Boolean);
-  const h = 196 + lines.length * 19 + (it.tag ? 24 : 0) + btns.length * 56, y = Math.max(20 + SAFE_T, (H - h) / 2);
+  // Список уровней (эволюция героя): не влезает под описанием — встаёт колонкой справа
+  const mainH = cw => 196 + (wrapText(it.info || '', cw - 36, 14).length + (it.info2 ? wrapText(it.info2, cw - 36, 14).length : 0)) * 19 + (it.tag ? 24 : 0) + btns.length * 56;
+  const lvH = cw => it.levels ? 34 + it.levels.reduce((a, L) => a + wrapText(L.t, cw - 64, 12).length * 16 + 6, 0) : 0;
+  let w = Math.min(W - 40, it.levels ? 400 : 360), side = false;
+  if (it.levels && mainH(w) + lvH(w) > H - 40 - SAFE_T - SAFE_B && W - 40 >= 640) { side = true; w = Math.min(W - 40, 760); }
+  const cw = side ? w / 2 : w, x = (W - w) / 2;
+  const lines = wrapText(it.info || '', cw - 36, 14), lines2 = it.info2 ? wrapText(it.info2, cw - 36, 14) : [];
+  const h = side ? Math.max(mainH(cw), lvH(cw) + 40) : mainH(cw) + lvH(cw), y = Math.max(20 + SAFE_T, (H - h) / 2);
+  const mx = x + cw / 2; // центр основной колонки
   ui.push({ x: 0, y: 0, w: W, h: H, act: () => { detail = null; } }); // тап мимо окна — закрыть
   pxBox(x, y, w, h, UI.panel);
   ui.push({ x, y, w, h, act: () => {} });
   pxRibbon(it.name, W / 2, y, shade(it.dim ? '#55525e' : it.color, -0.15), 18, w - 20);
-  pxInset(W / 2 - 51, y + 30, 102, 102);
-  drawIcon(it.icon, W / 2, y + 81, 80);
+  pxInset(mx - 51, y + 30, 102, 102);
+  drawIcon(it.icon, mx, y + 81, 80);
   let ty = y + 152;
-  if (it.badge) { outlined(it.badge, W / 2, ty, 16, '#ffe27a'); ty += 26; }
-  for (const l of lines) { text(l, W / 2, ty, 14, UI.soft, 'center', false); ty += 19; }
-  if (it.tag) { outlined(it.tag, W / 2, ty + 2, 12, it.tagColor || UI.soft, 'center', w - 24); ty += 24; }
+  if (it.badge) { outlined(it.badge, mx, ty, 16, '#ffe27a'); ty += 26; }
+  for (const l of lines) { text(l, mx, ty, 14, UI.soft, 'center', false); ty += 19; }
+  for (const l of lines2) { text(l, mx, ty, 14, '#fff', 'center', false); ty += 19; }
+  if (it.tag) { outlined(it.tag, mx, ty + 2, 12, it.tagColor || UI.soft, 'center', cw - 24); ty += 24; }
+  // Уровни: ✓ — открыт, следующий подсвечен, остальные приглушены
+  if (it.levels) {
+    const lx = side ? x + cw + 4 : x + 18, lw = (side ? cw - 22 : cw - 36);
+    let ly = side ? y + 40 : ty + 6;
+    outlined(it.levelsTitle || '', lx + lw / 2, ly + 8, 14, '#c77dff', 'center', lw);
+    ly += 26;
+    const next = it.levels.findIndex(L => !L.done);
+    it.levels.forEach((L, i) => {
+      const ls = wrapText(L.t, lw - 28, 12), rh = ls.length * 16 + 6;
+      if (i === next) { ctx.fillStyle = 'rgba(199,125,255,0.16)'; ctx.fillRect(snap(lx), snap(ly - 2), snap(lw), snap(rh)); }
+      const col = L.done ? UI.green : i === next ? '#e8d8ff' : '#8a8698';
+      outlined(L.done ? '✓' : String(i + 1), lx + 11, ly + 8, 12, L.done ? UI.green : i === next ? '#c77dff' : '#8a8698', 'center');
+      ls.forEach((t, k) => text(t, lx + 26, ly + 8 + k * 16, 12, col, 'left', false));
+      ly += rh;
+    });
+    if (!side) ty = ly + 4;
+  }
   ty += 8;
   for (const b of btns) {
-    drawButton({ x: x + 18, y: ty, w: w - 36, h: 48 }, { label: b.label, color: b.ok ? b.color || UI.gold : null, dim: !b.ok,
+    drawButton({ x: x + 18, y: ty, w: cw - 36, h: 48 }, { label: b.label, color: b.ok ? b.color || UI.gold : null, dim: !b.ok,
       act: b.ok ? b.act : () => { if (b.why) showToast(b.why); } });
     ty += 56;
   }
@@ -948,7 +980,7 @@ function shopItemsTab() {
       }),
       { header: 'Сундук оружия' },
       { name: CHESTS.weapon.name, color: '#c77dff', icon: chest('weapon'), info: CHESTS.weapon.info, btn: buyBtn({ stars: W.stars }, 'weaponChest', 0, () => openChest('weapon')) },
-      { name: CHESTS.weapon.name + ' за билет', color: '#c77dff', icon: chest('weapon'), info: 'Раз в день', tag: `Билетов: ${SAVE.tickets}`,
+      PAID && { name: CHESTS.weapon.name + ' за билет', color: '#c77dff', icon: chest('weapon'), info: 'Раз в день', tag: `Билетов: ${SAVE.tickets}`,
         btn: { label: left('weaponTicket', W.ticketDaily) ? '🎫 Билет' : 'Завтра', ok: SAVE.tickets > 0 && left('weaponTicket', W.ticketDaily) > 0,
           act: () => { if (SAVE.tickets < 1 || !left('weaponTicket', W.ticketDaily)) return; SAVE.tickets--; dayUse('weaponTicket'); done(openChest('weapon')); },
           why: left('weaponTicket', W.ticketDaily) ? 'Билеты дают подписки' : 'Лимит на сегодня исчерпан' } },
@@ -966,15 +998,14 @@ function shopItemsTab() {
   if (shopTab === 'chests') {
     const offers = chapterOffers();
     return [
-      { header: 'Сундук главы' },
-      ...(offers.length ? offers.slice(0, 3).map(k => {
+      ...(!PAID ? [] : [{ header: 'Сундук главы' }, ...(offers.length ? offers.slice(0, 3).map(k => {
         const o = SHOP.chapterOffer(k);
         return {
           name: `Сундук главы ${k * SHOP.chapterEvery}`, color: '#ffd166', icon: chest('red'),
           info: `${o.stars} ⭐  ${rewardGold(o)} ●  ${KB}${o.keys.blue} синих  ${KR}${o.keys.red} красный`, tag: 'Разовое предложение', tagColor: '#ffd166',
           btn: testBtn(o.usd + ' $', () => done(buyChapter(k))),
         };
-      }) : [{ name: 'Пока нет предложений', color: '#9a9eae', info: `Каждые ${SHOP.chapterEvery} пройденных глав — новый сундук главы` }]),
+      }) : [{ name: 'Пока нет предложений', color: '#9a9eae', info: `Каждые ${SHOP.chapterEvery} пройденных глав — новый сундук главы` }])]),
       { header: 'Ключи дня' },
       ...[['blue', 'Синий ключ', '#4cc9f0'], ['red', 'Красный ключ', '#ff5d73']].map(([k, name, color]) => ({
         name, color, icon: keyIcon(color),
@@ -1065,42 +1096,53 @@ function statItems() {
   })];
 }
 
+// Гем героя: фиолетовый кристалл с гранью
+const heroGemIcon = keyed('hgem', (x, y, s) => {
+  ctx.fillStyle = '#c77dff';
+  ctx.beginPath(); ctx.moveTo(x - s * 0.3, y - s * 0.12); ctx.lineTo(x - s * 0.14, y - s * 0.34); ctx.lineTo(x + s * 0.14, y - s * 0.34); ctx.lineTo(x + s * 0.3, y - s * 0.12); ctx.lineTo(x, y + s * 0.38); ctx.fill();
+  ctx.fillStyle = '#e8d0ff';
+  ctx.beginPath(); ctx.moveTo(x - s * 0.14, y - s * 0.34); ctx.lineTo(x, y - s * 0.12); ctx.lineTo(x - s * 0.3, y - s * 0.12); ctx.fill();
+});
+
+// Плитки героев. Под открытым героем — гемы на следующую эволюцию (1 гем = 1 ступень), как пазлы под оружием
 function heroItems() {
-  const id0 = SAVE.hero, l0 = heroLvl(id0), gems = SAVE.heroGems[id0] || 0;
-  const evo = {
-    name: `Эволюция: ${HEROES[id0].name} ${l0}/${HERO_EVO.length}`, color: '#c77dff', icon: medalIcon('#c77dff', true),
-    info: l0 < HERO_EVO.length ? 'Дальше: ' + HERO_EVO[l0] : 'Максимальная эволюция',
-    tag: `Гемов: ${gems} · гемы героев дают только ивенты`, tagColor: '#c77dff',
-    btn: { label: 'Гем', ok: gems > 0 && l0 < HERO_EVO.length, act: () => evolveHero(id0), why: 'Гемы героев выпадают только на ивентах' },
-  };
-  return [evo, ...Object.entries(HEROES).sort((a, b) => a[1].rarity - b[1].rarity).map(([id, H]) => {
+  return Object.entries(HEROES).sort((a, b) => a[1].rarity - b[1].rarity).map(([id, H]) => {
     const l = heroLvl(id), on = SAVE.hero === id, ev = heroEvo(Math.max(1, l)), R = RARITY[H.rarity];
+    const gems = SAVE.heroGems[id] || 0, max = l >= HERO_EVO.length, canEvo = l > 0 && !max && gems > 0;
     return {
       id: 'h' + id, tile: true, name: H.name, color: R.color, icon: heroIcon(id, SAVE.outfit), mark: on, dim: !l,
+      bar: l && !max ? { v: gems, max: 1, icon: heroGemIcon } : null, ready: canEvo,
+      extra: l ? [max ? { label: 'Эволюция: МАКС', ok: false }
+        : { label: `Эволюция ${l + 1}/${HERO_EVO.length} · 💎 ${gems}/1`, ok: canEvo, color: '#9d4edd', act: () => evolveHero(id), why: 'Гемы героев выпадают только на ивентах' }] : [],
       badge: on ? 'В бою' : l ? H.title : H.stars + ' ⭐',
-      info: `${H.title[0].toUpperCase() + H.title.slice(1)}. Активка «${H.active}»: ${H.activeInfo}`,
+      info: H.desc, info2: `Активка «${H.active}»: ${H.activeInfo}`,
+      // Ступени эволюции: что открывается на каждой; done — уже открыта у этого героя
+      levels: HERO_EVO.map((t, i) => ({ t, done: l > i })), levelsTitle: 'Уровни эволюции',
       tag: `${R.name} · ${H.race} · ${WEAPONS[H.weapon].name} +${ev.passive}%` + (l ? ` · эвол. ${l}/${HERO_EVO.length}` : ''),
       tagColor: R.color,
       btn: on ? { label: 'В бою', ok: false }
         : l ? { label: 'Взять в бой', ok: true, color: UI.green, act: () => buyOrPickHero(id) }
         : { label: H.stars + ' ⭐', ok: SAVE.stars >= H.stars, act: () => buyOrPickHero(id), why: 'Не хватает звёзд — магазин (каждый день бесплатно) и недельные задания' },
     };
-  })];
+  });
 }
 
 function shopItems(kind) {
   const sh = SHOPS[kind];
   return Object.entries(sh.data).map(([id, d]) => {
     const own = owns(kind, id), on = SAVE[sh.on] === id;
+    // Питомца сначала нужно встретить: он живёт в своей локации кампании
+    const met = !d.from || SAVE.unlocked >= d.from;
     const icon = kind === 'outfit' ? (d.cat ? Object.assign((x, y, s) => { heroIcon(SAVE.hero, id)(x - s * 0.1, y, s); drawCat(x + s * 0.27, y + s * 0.42, -1, 0, Math.max(1, Math.round(s / 30))); }, { raw: true }) : heroIcon(SAVE.hero, id))
-      : Object.assign((x, y, s) => drawPetSprite(id, x, y, s / 16), { raw: true });
+      : Object.assign((x, y, s) => drawPetSprite(id, x, y, Math.max(1, Math.round(s / 12))), { raw: true });
     return {
       name: d.name, color: '#ffd166', icon, mark: on,
-      info: d.info || 'Головной убор',
+      info: (d.info || 'Головной убор') + (d.ward ? ' · ' + d.ward.map(z => HAZARDS[z].icon + ' ' + HAZARDS[z].name).join(', ') : ''),
       tag: on ? (kind === 'pet' ? 'С тобой' : 'Надето') : own ? 'Куплено' : '',
       tagColor: on ? '#ffd166' : '#57e389',
       btn: on ? { label: kind === 'pet' ? 'С тобой' : 'Надето', ok: false }
         : own ? { label: kind === 'pet' ? 'Взять' : 'Надеть', ok: true, color: '#57e389', act: () => buyOrEquip(kind, id) }
+        : !met ? { label: '🔒 Глава ' + d.from, ok: false, why: 'Встретишь в локации: ' + locOf(d.from).name }
         : { label: d.price + ' ●', ok: SAVE.gold >= d.price, act: () => buyOrEquip(kind, id), why: NO_GOLD },
     };
   });
@@ -1143,8 +1185,8 @@ const SHEETS = {
   weapon: ['ОРУЖИЕ', () => weaponItems(), 'Тап — взять в бой · 10 🧩 = +1 уровень'],
   wardrobe: ['ГАРДЕРОБ', () => (wardTab === 'stats' ? statItems() : wardTab === 'heroes' ? heroItems() : shopItems('outfit')), null,
     { tabs: [['stats', 'Прокачка'], ['heroes', 'Герои'], ['outfit', 'Одежда']], get on() { return wardTab; }, set: id => { wardTab = id; } }],
-  shop: ['МАГАЗИН', () => shopItemsTab(), () => `🎫 Билеты: ${SAVE.tickets} · ${KB} ${SAVE.keys.blue} · ${KR} ${SAVE.keys.red}`,
-    { tabs: [['shelves', 'Полки'], ['chests', 'Сундуки'], ['stars', 'Звёзды'], ['sub', 'Подписка']], get on() { return shopTab; }, set: id => { shopTab = id; } }],
+  shop: ['МАГАЗИН', () => shopItemsTab().filter(Boolean), () => (PAID ? `🎫 Билеты: ${SAVE.tickets} · ` : '') + `${KB} ${SAVE.keys.blue} · ${KR} ${SAVE.keys.red}`,
+    { tabs: [['shelves', 'Полки'], ['chests', 'Сундуки'], ...(PAID ? [['stars', 'Звёзды'], ['sub', 'Подписка']] : [])], get on() { return shopTab; }, set: id => { shopTab = id; } }],
   boost: ['БУСТЫ', () => boostItems(), () => SAVE.gems.boost > 0 ? `💎 Гемов: ${SAVE.gems.boost} — выбери буст, получит +1 уровень` : 'Пазлы бустов — в кейсе бустов за синий ключ'],
   pet: ['ПИТОМЕЦ', () => shopItems('pet')],
   catacombs: ['КАТАКОМБЫ', () => catacombItems(), 'Спустись в подземелье — испытания с наградами'],

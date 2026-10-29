@@ -15,10 +15,22 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 // ------------------------------------------------------------
 
 const ARCH = {
-  grunt:  { r: 9,  hp: 12, speed: 46, dmg: 8,  xp: 1, weight: 1 },
-  runner: { r: 7,  hp: 7,  speed: 82, dmg: 6,  xp: 1, weight: 0.7 },
-  brute:  { r: 12, hp: 30, speed: 40, dmg: 11, xp: 2, weight: 0.35 },
-  tank:   { r: 16, hp: 90, speed: 30, dmg: 15, xp: 5, weight: 0.1 },
+  grunt:  { r: 9,  hp: 24,  speed: 46, dmg: 8,  xp: 1, weight: 1 },
+  runner: { r: 7,  hp: 14,  speed: 82, dmg: 6,  xp: 1, weight: 0.7 },
+  brute:  { r: 12, hp: 60,  speed: 40, dmg: 11, xp: 2, weight: 0.35 },
+  tank:   { r: 16, hp: 180, speed: 30, dmg: 15, xp: 5, weight: 0.1 },
+};
+
+// Особые мобы (не по локациям): появляются по таймеру главы, см. ECON ниже.
+// swarm — стая: быстрые, хилые, кусают один раз и умирают (bite — доля макс. HP героя за укус);
+// assassin — убийца: очень быстрый, бьёт больно, умирает с одного удара;
+// fat — толстяк: с него падает бой-бонус (BOONS); magnet — убегает, с него падает магнит
+// hp и dmg — множители к HP и урону обычного моба главы; oneHit — умирает с любого удара
+const SPECIAL = {
+  swarm:    { r: 5,  hp: 1,  speed: 150, dmg: 0, xp: 0.3, bite: 0.015, oneHit: true },
+  assassin: { r: 7,  hp: 1,  speed: 240, dmg: 3, xp: 3, oneHit: true, color: '#2a1a33' },
+  fat:      { r: 20, hp: 25, speed: 28, dmg: 1.5, xp: 15, color: '#e9c46a' },
+  magnet:   { r: 11, hp: 6,  speed: 0.75, dmg: 0, xp: 5, life: 25, color: '#4cc9f0' }, // speed — доля скорости героя
 };
 
 // Уровень моба (tier) = индекс + 1. По 3 вида на локацию, в порядке LOCATIONS
@@ -30,7 +42,8 @@ const MOBS = [
   // Иссохшие земли
   { name: 'Гнилой зверь',         arch: 'runner', shape: 'tri',  color: '#a39060' },
   { name: 'Ядовитая спора',       arch: 'grunt',  shape: 'circ', color: '#9acd32' },
-  { name: 'Мёртвый древень',      arch: 'tank',   shape: 'hex',  color: '#8a6a4a' },
+  // Мёртвое ходячее дерево: стрелы, нова и прочее его не берут — только топоры, огонь стрел и Живое дерево
+  { name: 'Мёртвый древень',      arch: 'tank',   shape: 'tree', color: '#8a6a4a', woody: true },
   // Башня Равновесия
   { name: 'Дух магии',            arch: 'runner', shape: 'dia',  color: '#7df9ff' },
   { name: 'Элементаль',           arch: 'grunt',  shape: 'dia',  color: '#ff8a4c' },
@@ -107,8 +120,9 @@ const WEAPONS = {
       count:  { max: 3, name: 'Стрела',      info: '+1 стрела в залпе' },
       pierce: { max: 2, name: 'Пробитие',    info: 'Стрела пробивает ещё 1 врага' },
       volley: { max: 3, name: 'Залп',        info: '+20% шанс второго залпа' },
+      fire:   { max: 3, name: 'Огненная стрела', info: 'Стрела поджигает: каждое попадание — +1 стак ожога' },
     },
-    stats: u => ({ dmg: 10 * (1 + 0.3 * u.dmg), cd: 0.8 * 0.88 ** u.rate, count: 1 + u.count, pierce: 1 + u.pierce, volley: 0.2 * u.volley }),
+    stats: u => ({ dmg: 10 * (1 + 0.3 * u.dmg), cd: 0.8 * 0.88 ** u.rate, count: 1 + u.count, pierce: 1 + u.pierce, volley: 0.2 * u.volley, fire: u.fire }),
   },
   orbit: {
     name: 'Сюрикены', color: '#c9d3e0', tier: 'purple', info: 'Сюрикены кружат вокруг героя',
@@ -151,7 +165,20 @@ const WEAPONS = {
     },
     stats: u => ({ radius: 52 + 12 * u.radius, dmg: 5 * (1 + 0.3 * u.dmg), tick: 0.5 * 0.85 ** u.tick, slow: 0.1 * u.slow }),
   },
+  // Топоры: летают вокруг героя, как сюрикены, но их максимум 2 и бьют сильнее. Рубят Мёртвых древней
+  axes: {
+    name: 'Топоры', color: '#d9a066', tier: 'blue', info: 'Тяжёлые топоры кружат вокруг героя. Рубят мёртвые деревья',
+    ups: {
+      count:  { max: 1, name: 'Второй топор', info: '+1 топор (максимум 2)' },
+      dmg:    { max: 5, name: 'Урон',         info: '+30% урона' },
+      radius: { max: 3, name: 'Размах',       info: 'Топоры летают дальше от героя' },
+      spin:   { max: 3, name: 'Вращение',     info: '+15% к скорости вращения' },
+    },
+    stats: u => ({ count: 1 + u.count, dmg: 30 * (1 + 0.3 * u.dmg), radius: 62 + 10 * u.radius, spin: 2.2 * (1 + 0.15 * u.spin), push: 220 }),
+  },
 };
+const MAX_AXES = 2;
+const MAGIC_WEAPONS = ['nova', 'stench']; // их усиливает бой-бонус «Магия»
 const MAX_RUN_WEAPONS = 8; // сколько оружия можно собрать за бой
 const newUps = id => Object.fromEntries(Object.keys(WEAPONS[id].ups).map(k => [k, 0])); // оружие без улучшений
 
@@ -163,6 +190,20 @@ const PASSIVES = {
   regen:  { name: 'Регенерация', color: '#80ffdb', max: 5, info: '+0.6 HP в секунду',       apply: h => { h.regen += 0.6; } },
 };
 
+// Бой-бонусы: падают с толстяков прямо в бою и копятся до конца боя (не путать с бустами убежища)
+const BOONS = {
+  xp:     { name: 'Опыт',      color: '#4cc9f0', info: '+25% опыта' },
+  proj:   { name: 'Снаряды',   color: '#ffd166', info: '+1 стрела, сюрикен и топор, +3 снаряда Новы' },
+  magic:  { name: 'Магия',     color: '#c77dff', info: '+25% урона Новы и Ауры' },
+  crit:   { name: 'Крит',      color: '#ff9f1c', info: '+5% шанс крита' },
+  size:   { name: 'Размер',    color: '#a8e6cf', info: '+15% к размеру атак' },
+  speed:  { name: 'Скорость',  color: '#57e389', info: '+10% к скорости героя' },
+  hp:     { name: 'Здоровье',  color: '#ff5d73', info: '+25 к макс. HP' },
+  thorns: { name: 'Шипы',      color: '#b8c0cc', info: 'Отражает 30% урона от касаний' },
+  regen:  { name: 'Регенерация', color: '#80ffdb', info: '+0.8 HP в секунду' },
+  magnet: { name: 'Магнит',    color: '#7df9ff', info: '+35% радиус сбора' },
+};
+
 // ------------------------------------------------------------
 //  Локации кампании (см. DESIGN.md). Это и поля боя: декор и палитра.
 //  mult — множитель сложности на входе в локацию; hazard — что горит
@@ -171,22 +212,22 @@ const PASSIVES = {
 
 const LOCATIONS = [
   { id: 'forest', name: 'Опушка Звёздного леса', from: 1, to: 10, mult: 1, color: '#57e389', bg: '#101611', decor: 'grass',
-    hazard: 'poison', bosses: ['goblinShaman', 'wolfLeader', 'rootGuard'],
+    hazard: 'swamp', bosses: ['goblinShaman', 'wolfLeader', 'rootGuard'],
     pal: { patch: ['#141e15', '#0d130e'], tuft: '#26391f', stone: ['#2a2f2b', '#383e39'], bush: ['#1a2b19', '#233a20'], flowers: ['#7d7444', '#6f5470', '#566b8a'] } },
   { id: 'withered', name: 'Иссохшие земли', from: 11, to: 25, mult: 3, color: '#c8b45a', bg: '#15120c', decor: 'grass',
-    hazard: 'poison', bosses: ['sporeLord', 'rotBoar', 'rotMother'],
+    hazard: 'sand', bosses: ['sporeLord', 'rotBoar', 'rotMother'],
     pal: { patch: ['#1d1810', '#100d08'], tuft: '#3a3220', stone: ['#2e2a22', '#3b362c'], bush: ['#2a2416', '#3a3020'], flowers: ['#5a6a2a', '#4a3a2a', '#6a5a3a'] } },
   { id: 'tower', name: 'Башня Равновесия', from: 26, to: 45, mult: 8, color: '#7df9ff', bg: '#0a0b18', decor: 'crypt',
     hazard: 'fire', bosses: ['madMage', 'stoneGolem', 'archmage'],
     pal: { tiles: ['#12142a', '#101226', '#15182e'], crack: '#0a0b18', debris: '#1e2240', bone: '#343a5a', skull: '#3a4060' } },
   { id: 'mines', name: 'Шахты Подгорья', from: 46, to: 70, mult: 20, color: '#c8a165', bg: '#0e0c0a', decor: 'crypt',
-    hazard: 'poison', bosses: ['whisperer', 'oreGiant', 'whisperVein'],
+    hazard: 'thorns', bosses: ['whisperer', 'oreGiant', 'whisperVein'],
     pal: { tiles: ['#1a1612', '#17130f', '#1d1915'], crack: '#0e0c0a', debris: '#2a241c', bone: '#3a3328', skull: '#40382c' } },
   { id: 'gates', name: 'Небесные Врата', from: 71, to: 100, mult: 50, color: '#fff3a0', bg: '#10131c', decor: 'crypt',
     hazard: 'fire', bosses: ['fallenSeraph', 'gateGuard', 'gatekeeper'],
     pal: { tiles: ['#1c2130', '#1a1e2c', '#202536'], crack: '#10131c', debris: '#2c3448', bone: '#4a5470', skull: '#4f5a78' } },
   { id: 'hell', name: 'Преисподняя', from: 101, to: 140, mult: 120, color: '#ff8a4c', bg: '#140b09', decor: 'lava',
-    hazard: 'fire', bosses: ['demonologist', 'hellBrute', 'fireLord'] },
+    hazard: 'lava', bosses: ['demonologist', 'hellBrute', 'fireLord'] },
   { id: 'abyss', name: 'Бездна', from: 141, to: 150, mult: 300, color: '#e040fb', bg: '#08060e', decor: 'crypt',
     hazard: 'void', bosses: ['heroShade', 'timeEater', 'gateOpener'],
     pal: { tiles: ['#120c1e', '#0f0a19', '#150e24'], crack: '#08060e', debris: '#2a1a40', bone: '#3a2a55', skull: '#45306a' } },
@@ -202,10 +243,14 @@ const TRAITS = {
   r: { name: 'Стрелки', icon: '🏹', color: '#4cc9f0', info: 'Часть мобов стреляет издалека' },
   z: { name: 'Щит босса', icon: '🔰', color: '#7df9ff', info: 'Щит гасит снаряды без пробития и Нову. Бери Лук с Пробитием, Меч или Сюрикены' },
 };
+// slow — насколько тормозит героя в луже; dmg — жжёт ли при касании. Питомец со своим видом луж (PETS.ward) защищает
 const HAZARDS = {
-  poison: { name: 'Яд',      icon: '☠', color: '#57e389', rgb: '87,227,137' },
-  fire:   { name: 'Огонь',   icon: '🔥', color: '#ff8a4c', rgb: '255,138,76' },
-  void:   { name: 'Разломы', icon: '🌀', color: '#c77dff', rgb: '199,125,255' },
+  swamp:  { name: 'Болото',         icon: '🟢', color: '#6b8f3a', rgb: '107,143,58',  slow: 0.5 },
+  sand:   { name: 'Сыпучие пески',  icon: '⏳', color: '#d8b46a', rgb: '216,180,106', slow: 0.55, pull: 40 },
+  thorns: { name: 'Колючие лозы',   icon: '🌿', color: '#4f8a3a', rgb: '79,138,58',   slow: 0.4, dmg: true },
+  lava:   { name: 'Лава',           icon: '🌋', color: '#ff5a14', rgb: '255,90,20',   slow: 0.35, dmg: true },
+  fire:   { name: 'Огонь',          icon: '🔥', color: '#ff8a4c', rgb: '255,138,76',  dmg: true },
+  void:   { name: 'Разломы',        icon: '🌀', color: '#c77dff', rgb: '199,125,255', dmg: true },
 };
 const levelTraits = n => [...LEVELS[n - 1][1]];
 const traitView = (t, n) => (t === 'h' ? HAZARDS[locOf(n).hazard] : TRAITS[t]);
@@ -236,7 +281,8 @@ const ECON = {
   // 4 волны: 0–25%, 25–50%, 50–75%, 75–100% прогресса
   waveHp: [1, 1.15, 1.3, 1.5],
   waveRate: [1, 1.3, 1.6, 2],
-  bossHp: n => ECON.levelHp(n) * (n === 1 ? 0.6 : 1) * (n === locOf(n).to ? 1.6 : 1), // босс локации толще
+  bossHp: n => 2.5 * ECON.levelHp(n) * (n === 1 ? 0.6 : 1) * (n === locOf(n).to ? 1.6 : 1), // босс локации толще
+  mobHp: n => 1 + 0.04 * (n - 1), // мобы крепнут с каждой главой, а не только скачками на входе в локацию
 
   // Особенности уровня
   armor: 0.3,                                  // «Броня»: доля урона, которую режут мобы и босс
@@ -249,6 +295,14 @@ const ECON = {
   eliteAt: 0.12,               // в кампании — на каждых 12% прогресса уровня (до 7 за уровень)
   eliteEvery: 50,              // в бесконечном — раз в столько секунд
   eliteHp: 8, eliteSize: 1.6,
+
+  // Особые мобы (SPECIAL). В кампании — на долях прогресса главы, в бесконечном — раз в столько секунд
+  fatAt: [0.2, 0.45, 0.7, 0.9], fatEvery: 70,     // толстяк с бой-бонусом
+  magnetAt: [0.5, 0.95], magnetEvery: 150,      // моб-магнит: на 50% и перед боссом
+  swarmFrom: 3, swarmEvery: 40, swarmSize: 20,  // стая птиц/пауков: с какой главы, как часто, сколько
+  assassinFrom: 6, assassinEvery: 30,           // убийца: с какой главы и как часто
+  burnTime: 3, burnDps: 0.05, burnMax: 10,      // ожог огненной стрелы: длительность, доля урона стрелы/с за стак, макс. стаков
+  treeRevive: 0.35,                             // шанс, что Живое дерево возродит срубленного Мёртвого древня
 
   // Гардероб: у каждой характеристики своя цена, она растёт с каждой её прокачкой
   // (s — сколько раз прокачана именно эта характеристика): 10, 17, 30, 45, 65 … ≈800 к 25-му шагу, ≈60 тыс. к 500-му
@@ -292,7 +346,7 @@ const DIFFS = [
 const clearKey = (n, d) => (d ? n + 'hx'[d - 1] : String(n)); // ключ в SAVE.cleared
 
 // Разделы убежища открываются, когда игрок дошёл до этого уровня кампании
-const UNLOCKS = { boost: 10, pet: 40 };
+const UNLOCKS = { boost: 10, pet: 15 };
 
 // Название, лор и босс уровня кампании (тексты уровней — в levels.js)
 const levelArena = n => locOf(n).id;
@@ -334,19 +388,29 @@ const RARITY = [{ name: 'Базовый', color: '#c8cbd6' }, { name: 'Редк�
 // Редкость героя = редкость его оружия; у каждого из 5 оружий свой герой
 const HEROES = {
   orin:   { name: 'Орин',   title: 'юный лучник',      race: 'Люди',   rarity: 0, weapon: 'wand',  stars: 0,
-    pal: { 1: '#f2c9a0', 3: '#3e8ef7' }, active: 'Град стрел',   activeInfo: 'лук стреляет вдвое чаще' },
+    pal: { 1: '#f2c9a0', 3: '#3e8ef7' }, desc: 'Юный лучник из деревни у Звёздного леса. Стреляет быстро и метко — с него начинается путь.',
+    active: 'Град стрел',   activeInfo: 'лук стреляет вдвое чаще' },
   // id faeron остался от эльфа-клинка — на нём держатся сохранения
   faeron: { name: 'Кайто',  title: 'ниндзя',           race: 'Люди',   rarity: 2, weapon: 'orbit', stars: 1000,
-    pal: { 1: '#e0b48a', 3: '#2b2d3a', 9: '#c0303a' }, active: 'Вихрь сюрикенов', activeInfo: 'сюрикенов больше, режут сильнее',
+    pal: { 1: '#e0b48a', 3: '#2b2d3a', 9: '#c0303a' }, desc: 'Ниндзя из далёкого клана. Сюрикены режут всех, кто подойдёт слишком близко.',
+    active: 'Вихрь сюрикенов', activeInfo: 'сюрикенов больше, режут сильнее',
     body: ['..0000..', '.099990.', '.012120.', '.033330.', '..0330..', '.033330.', '01333310', '..3333..'] },
   grax:   { name: 'Гракс',  title: 'орк-рубака',       race: 'Орки',   rarity: 0, weapon: 'aura',  stars: 1000,
-    pal: { 1: '#9ab070', 3: '#8a96a8' }, active: 'Вихрь',         activeInfo: 'меч рубит по кругу и на треть дальше' },
+    pal: { 1: '#9ab070', 3: '#8a96a8' }, desc: 'Орк-рубака. Один широкий взмах меча — и толпа редеет.',
+    active: 'Вихрь',         activeInfo: 'меч рубит по кругу и на треть дальше' },
   eliana: { name: 'Элиана', title: 'страж света',      race: 'Ангелы', rarity: 1, weapon: 'nova',  stars: 1000,
-    pal: { 1: '#f8e0c8', 3: '#e8e4ff' }, active: 'Сияние',        activeInfo: 'нова бьёт втрое чаще, лечит 15% HP' },
+    pal: { 1: '#f8e0c8', 3: '#e8e4ff' }, desc: 'Страж света с Небесных Врат. Её нова бьёт во все стороны и лечит.',
+    active: 'Сияние',        activeInfo: 'нова бьёт втрое чаще, лечит 15% HP' },
   // Болотный тролль: зелёная кожа, клыки (7), лохмотья
   burp:   { name: 'Бурп',   title: 'болотный тролль',  race: 'Тролли', rarity: 1, weapon: 'stench', stars: 1000,
-    pal: { 1: '#7fa05a', 3: '#5a4a32' }, active: 'Зловоние',     activeInfo: 'аура вдвое шире и жжёт вдвое чаще',
+    pal: { 1: '#7fa05a', 3: '#5a4a32' }, desc: 'Болотный тролль. Воняет так, что враги падают ещё на подходе.',
+    active: 'Зловоние',     activeInfo: 'аура вдвое шире и жжёт вдвое чаще',
     body: ['..0000..', '.011110.', '.012120.', '.071170.', '..0330..', '.033330.', '01333310', '..3333..'] },
+  // Лесоруб: зелёная вязаная шапка (9), рыжая борода (c), красная клетчатая рубаха
+  bjorn:  { name: 'Бьорн',  title: 'лесоруб',          race: 'Люди',   rarity: 1, weapon: 'axes', stars: 1000,
+    pal: { 1: '#e8b48a', 3: '#c0392b', 9: '#2f6a3a', c: '#b0602a' }, desc: 'Северный лесоруб. Знает, как валить мёртвые деревья: его топоры берут даже древней.',
+    active: 'Буря топоров', activeInfo: 'топоры крутятся вдвое быстрее, летают шире, +1 топор',
+    body: ['..0000..', '.099990.', '.012120.', '.0cccc0.', '..0cc0..', '.033330.', '01333310', '..3333..'] },
 };
 
 // ------------------------------------------------------------
@@ -395,6 +459,10 @@ const RED_CHEST_TIERS = [['purple', 0.8], ['yellow', 0.15], ['red', 0.05]];
 const KEY_ADS = 1;      // ключ каждого цвета: 1 в день бесплатно + KEY_ADS за рекламу
 const GEM_EVERY = 100;  // каждые 100 открытий кейса — гем: +1 уровень бусту (синий) или красному оружию (красный)
 const WEAPON_CHEST_TIERS = [['green', 0.6], ['blue', 0.3], ['purple', 0.1]]; // выше фиолетового не падает
+
+// Платное (звёзды за деньги, подписки, сундуки глав, рейды и билеты из подписок). false — для тестовых сборок:
+// в магазине этого нет, бонусы подписок из старых сохранений не действуют. Включать вместе с настоящими покупками
+const PAID = false;
 
 const SHOP = {
   freeStars: { stars: 100, ads: 5 },                 // 1 раз в день бесплатно, потом 5 раз за рекламу/билет
@@ -488,8 +556,16 @@ const OUTFITS = {
     head: ['.bbbbbb.', 'bb1111bb', 'bb1212bb', 'bb1111bb'], pal: { 3: '#fbf7f4', 4: '#f7a8c8' } },
 };
 
+// Питомцы бессмертны: мобы их не трогают. ward — от каких луж защищает (урон не наносит, оружие не баффает);
+// from — с какой главы питомца можно встретить (принц находит его в «его» локации)
 const PETS = {
   none:    { name: 'Без питомца', price: 0,   info: 'Ходишь один' },
   owl:     { name: 'Совёнок',     price: 300, info: '+60% к радиусу сбора' },
   firefly: { name: 'Светлячок',   price: 800, info: 'Стреляет в ближайшего врага' },
+  beaver:  { name: 'Бобёр',       price: 1500, from: 1,   ward: ['swamp'],        info: 'Стелет мостки из веток: болото не тормозит' },
+  fennec:  { name: 'Фенек',       price: 2500, from: 11,  ward: ['sand'],         info: 'Учит ступать легко: пески не засасывают' },
+  tree:    { name: 'Живое дерево', price: 3000, from: 11, info: 'Бьёт Мёртвых древней корнями; срубленный может ожить и драться за тебя' },
+  goat:    { name: 'Коза',        price: 4000, from: 46,  ward: ['thorns'],       info: 'Объедает лозы вокруг: колючки не тормозят и не ранят' },
+  penguin: { name: 'Пингвин',     price: 6000, from: 101, ward: ['lava', 'fire'], info: 'Охлаждает героя: огонь и лава не страшны' },
 };
+const petWards = (pet, hz) => !!(PETS[pet].ward && PETS[pet].ward.includes(hz));
